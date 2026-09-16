@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PlayScreen } from './components/PlayScreen';
 import { parseFloor } from './core/scriptParser';
 import { MOCK_FLOOR_STAGE, MOCK_FLOOR_WITH_CONTENT } from './core/fixtures';
@@ -6,6 +6,13 @@ import { CHARACTERS, hasSprite } from './core/assets';
 import { resolveEmotion } from './core/scriptProtocol';
 import { runApiProbe, probeVerdict } from './core/apiProbe';
 import type { ProbeResult } from './core/apiProbe';
+import {
+  enterFullscreen,
+  exitFullscreen,
+  inTavernIframe,
+  startHeightGuard,
+  type GuardHandle,
+} from './core/fullscreen';
 
 // 降级夹具 = 把严格夹具的 <content> 标签摘掉，其余原样。
 // 这样「切换严格 / 降级」对比的是同一条故事，差异只来自协议边界。
@@ -51,6 +58,36 @@ export default function App() {
   const [probe, setProbe] = useState<ProbeResult | null>(() =>
     readSearch('probe') === '1' ? runApiProbe() : null,
   );
+
+  // ── iframe 高度守卫（S6）──
+  // 在酒馆里：把 iframe 撑到 ~800px 或视口高度，否则画面被压成一条窄缝。
+  // 裸跑预览：父页拿不到 jQuery → 守卫自动 no-op，不影响本地开发。
+  const guardRef = useRef<GuardHandle | null>(null);
+  const [isFs, setIsFs] = useState(false);
+  const [canResize, setCanResize] = useState(false);
+
+  useEffect(() => {
+    const inIframe = inTavernIframe();
+    setCanResize(inIframe);
+    guardRef.current = startHeightGuard(false); // 手机端可传 true 用更矮的目标
+    return () => {
+      guardRef.current?.destroy();
+      guardRef.current = null;
+    };
+  }, []);
+
+  // 用户按 Esc 退出原生全屏时，也要把伪全屏一起退掉，
+  // 否则会留下「楼层已恢复、样式还挂着」的半吊子状态。
+  useEffect(() => {
+    const onFsChange = async () => {
+      if (!document.fullscreenElement && isFs) {
+        await exitFullscreen(() => guardRef.current?.burst());
+        setIsFs(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, [isFs]);
 
   const hasContent = parsed.lines.length > 0;
   const strictMode = parsed.usedContentTag;
@@ -121,6 +158,13 @@ export default function App() {
           切换严格 / 降级
         </button>
 
+        {/* 窗口/高度状态（S6）：让「画面被压扁」这类问题一眼可诊断。
+            在酒馆里应当显示「撑高 已生效」；裸跑预览必然是「不可用」，
+            因为父页没有 jQuery，这时高度交给浏览器窗口，本来就正常。 */}
+        <span data-minigal="devbar-size" data-resizable={canResize ? '1' : '0'}>
+          {canResize ? '撑高 已生效' : '撑高 不可用（非酒馆环境）'}
+        </span>
+
         {/* API 探针（S2 交付物，应用内版）。
             做成按钮而不是让人贴 DevTools：它天然跑在正确的 iframe 语境里，
             不存在「选错上下文导致全红误报」的问题。 */}
@@ -131,6 +175,25 @@ export default function App() {
           onClick={() => setProbe(runApiProbe())}
         >
           探 API
+        </button>
+
+        {/* 伪全屏（S6）：藏掉其它楼层 + 本楼铺满视口。
+            原生全屏被浏览器策略拒绝也无妨——CSS 已经铺满了，那是兜底路径。 */}
+        <button
+          type="button"
+          className="gal-devbtn gal-fsbtn"
+          data-minigal="fullscreen-btn"
+          data-fs={isFs ? '1' : '0'}
+          onClick={async () => {
+            if (isFs) {
+              await exitFullscreen(() => guardRef.current?.burst());
+              setIsFs(false);
+            } else if (await enterFullscreen()) {
+              setIsFs(true);
+            }
+          }}
+        >
+          {isFs ? '退出全屏' : '全屏'}
         </button>
       </div>
 

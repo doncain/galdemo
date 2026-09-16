@@ -533,3 +533,23 @@ body {
   border-top: 1px solid rgba(212, 183, 90, 0.2);
 }
 
+/* ══════════════════════════════════════════════════════════════
+   伪全屏与撑高状态（S6）
+   ══════════════════════════════════════════════════════════════ */
+
+/* 全屏按钮在激活时给个明显的态，否则用户不知道自己在全屏里 */
+.gal-devbtn.gal-fsbtn[data-fs='1'] {
+  color: #d4b75a;
+  border-color: rgba(212, 183, 90, 0.7);
+  background: rgba(212, 183, 90, 0.12);
+}
+
+/* 撑高状态：只读提示，不可点 */
+.gal-devbar [data-minigal='devbar-size'] {
+  color: #6d6a62;
+  letter-spacing: 0.5px;
+}
+.gal-devbar [data-minigal='devbar-size'][data-resizable='1'] {
+  color: #7fbf7a;
+}
+

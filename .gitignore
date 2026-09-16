@@ -18,6 +18,9 @@ dist/yaoguai/minigal/*.LICENSE.txt
 # 新文件没被挡住会跟着提交进仓库（几百 KB 的 HTML，且毫无用途）。
 # 通配一劳永逸。
 dist/dump*.html
+# 验收脚本临时写的页面（正常会在 finally 里删掉；
+# 万一崩溃残留，这一条挡住它，别让它进仓库）
+dist/tmp-*.html
 dist/shots/
 # 预览工具的产物（scripts/preview-floor.mjs）。
 # 注意 dist/*.png 只匹配 dist 根下的文件，挡不住 dist/preview/shot.png，
