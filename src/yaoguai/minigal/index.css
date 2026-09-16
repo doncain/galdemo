@@ -1,0 +1,446 @@
+// minigal · index.css（S1 播放层）
+// 朴素够用：无图、无立绘，纯文字 + 氛围色。美化随意，丑不影响验收。
+
+/* 高度链路必须一路撑满，缺一环 .gal-root 的 align-items:flex-end 就会失效，
+   表现为「文本框飘到顶部」——这是纯 CSS 的静默失效，不报错。 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+#root {
+  height: 100%;
+}
+
+.gal-app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.gal-root {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 18%, #1b1f2b 0%, #0d0f16 62%);
+  color: #f2ede2;
+  user-select: none;
+  cursor: pointer;
+  font-family: 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  display: flex;
+  align-items: flex-end;
+}
+
+/* 顶部信息条要压在文本框之上，否则会被 .gal-textbox 盖住 */
+.gal-floor-tag,
+.gal-floor-tag {
+  position: absolute;
+  top: 18px;
+  left: 24px;
+  padding: 4px 12px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  color: #8b8578;
+  border: 1px solid rgba(139, 133, 120, 0.3);
+  border-radius: 4px;
+}
+
+.gal-place {
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  padding: 4px 12px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  color: #a8c8e8;
+  border: 1px solid rgba(168, 200, 232, 0.28);
+  border-radius: 4px;
+}
+
+.gal-textbox {
+  position: relative;
+  z-index: 10;
+  margin: 0 auto 4vh;
+  width: min(880px, 92vw);
+  min-height: 22vh;
+  padding: 18px 24px 14px;
+  box-sizing: border-box;
+  background: rgba(10, 12, 18, 0.82);
+  border: 1px solid rgba(212, 183, 90, 0.35);
+  border-radius: 6px;
+}
+
+.gal-name {
+  position: absolute;
+  top: -16px;
+  left: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  background: #2b2f3d;
+  border: 1px solid rgba(212, 183, 90, 0.55);
+  border-radius: 4px;
+  font-size: 14px;
+  letter-spacing: 2px;
+  color: #f5d879;
+}
+
+.gal-name-user {
+  color: #9fd8ff;
+  border-color: rgba(120, 190, 255, 0.5);
+}
+
+/* 情绪标签：解析器早就在产出这个数据，S1 之前它一直困在数据里没有落点。
+   做成独立的窄胶囊，与角色名同排但视觉上分得开 —— 角色是「谁」，情绪是「什么状态」。 */
+.gal-emotion {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #d8b45a;
+  background: rgba(212, 183, 90, 0.14);
+  border: 1px solid rgba(212, 183, 90, 0.42);
+  white-space: nowrap;
+}
+
+/* 默认情绪（AI 没写方括号）弱化：虚线框 + 更低的对比度，
+   一眼能分出「作者明确标注了」和「系统兜了个默认值」。 */
+.gal-emotion-default {
+  color: #8b8578;
+  background: transparent;
+  border-style: dashed;
+  border-color: rgba(139, 133, 120, 0.55);
+}
+
+.gal-emotion-thought {
+  border-radius: 4px;
+  font-style: italic;
+}
+
+.gal-name-user .gal-emotion {
+  color: #9fd8ff;
+  background: rgba(120, 190, 255, 0.12);
+  border-color: rgba(120, 190, 255, 0.4);
+}
+
+.gal-name-user .gal-emotion-default {
+  color: #7b8fa0;
+  background: transparent;
+  border-style: dashed;
+  border-color: rgba(123, 143, 160, 0.55);
+}
+
+/* 旁白越界横幅：旁白应当是纯客观描写。AI 把台词写进旁白时不再静默放过。 */
+.gal-narrator-warn {
+  margin-bottom: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.4px;
+  color: #e8a86a;
+  background: rgba(232, 168, 106, 0.1);
+  border-left: 2px solid rgba(232, 168, 106, 0.6);
+  border-radius: 2px;
+}
+
+.gal-text-suspect {
+  color: #e0b98d;
+}
+
+.gal-text {
+  min-height: 12vh;
+  font-size: 19px;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  white-space: pre-wrap;
+}
+
+.gal-text.thought {
+  color: #e8c98a;
+  font-style: italic;
+}
+
+.gal-text.narrator {
+  color: #cfc9bc;
+}
+
+.gal-cursor {
+  display: inline-block;
+  margin-left: 4px;
+  animation: gal-blink 1s step-end infinite;
+}
+
+@keyframes gal-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gal-cursor {
+    animation: none;
+  }
+}
+
+.gal-foot {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #7d7a72;
+}
+
+.gal-options {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gal-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  box-sizing: border-box;
+  background: rgba(43, 47, 61, 0.72);
+  border: 1px solid rgba(212, 183, 90, 0.3);
+  border-radius: 6px;
+  color: #f2ede2;
+  font-family: inherit;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.gal-option:hover {
+  background: rgba(58, 63, 80, 0.9);
+  border-color: rgba(212, 183, 90, 0.7);
+}
+
+.gal-option-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 50%;
+  font-size: 12px;
+  color: #f5d879;
+  border: 1px solid rgba(212, 183, 90, 0.5);
+}
+
+.gal-hint {
+  letter-spacing: 0.5px;
+}
+
+.gal-confidence {
+  letter-spacing: 0.5px;
+  color: #8a7f66;
+}
+
+.gal-empty {
+  margin: auto;
+  padding: 40px;
+  color: #999;
+  text-align: center;
+  line-height: 2;
+}
+
+/* ── 开发条：仅本地裸跑可见的价值在「看清解析结果」，接入酒馆后整块删除 ── */
+.gal-app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.gal-devbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #8b8578;
+  background: rgba(8, 9, 13, 0.92);
+  border-top: 1px solid rgba(139, 133, 120, 0.2);
+}
+
+.gal-devbtn {
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  color: #cfc9bc;
+  background: rgba(43, 47, 61, 0.8);
+  border: 1px solid rgba(139, 133, 120, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.gal-devbtn:hover {
+  border-color: rgba(212, 183, 90, 0.6);
+  color: #f5d879;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   S3 演出层：背景 CG + 三槽位立绘舞台
+   ═══════════════════════════════════════════════════════════════
+
+   层级令牌（与 PlayScreen 注释一一对应，改这里必须同步改那里）：
+     z-0   背景图
+     z-5   立绘舞台
+     z-10  文本框
+     z-30  场景标签
+     z-40  开发条
+
+   为什么立绘是 z-5 而不是 z-20（夹在背景和文本框之间）：
+     立绘的头部要能被文本框压住一点，这是 galgame 的通行构图——
+     人站在画面下半部，文本框叠在腰/腿的位置。若立绘在文本框之上，
+     就会盖住台词，玩家读不到字。
+*/
+
+/* ── 背景层 ──
+   object-fit: cover 保证任意画幅下都铺满、不拉伸变形（背景图的常见要求）。
+   淡入动画挂在节点重建上：React 用 key={场景路径} 触发，同场景翻页不重放。 */
+.gal-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: gal-bgfade 0.6s ease both;
+}
+
+@keyframes gal-bgfade {
+  from { opacity: 0; transform: scale(1.015); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* 背景之上的压暗层：让白色台词在任何背景上都能读清。
+   没有它时，亮背景（白天/雪地）上的浅色文字会糊成一片。
+   用 .gal-root::before 而不是额外的 DOM 节点——纯装饰，不该占 DOM。 */
+.gal-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(8, 9, 13, 0.42) 0%, rgba(8, 9, 13, 0) 26%),
+    linear-gradient(to top, rgba(8, 9, 13, 0.78) 0%, rgba(8, 9, 13, 0.10) 46%, rgba(8, 9, 13, 0) 70%);
+}
+
+/* ── 立绘舞台 ── */
+.gal-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  /* 舞台整体不吃鼠标事件：点击要穿透到 .gal-root 上触发翻页。
+     立绘 img 也不单独开启 pointer-events —— S3 不做点立绘交互。 */
+  pointer-events: none;
+}
+
+.gal-sprite {
+  position: absolute;
+  bottom: 0;
+  height: 86%;
+  /* 宽度上限：立绘必须窄于画面 1/3，否则三个人必然叠在一起。
+     只看 data-position 属性的断言发现不了这个问题——属性全对，图却挤成一团，
+     得靠眼睛看截图。max-width 用 vw 而不是 % 是因为 % 算的是舞台宽度的比例，
+     而我们要限制的是「不超过画面三分之一」这个与角色数无关的物理量。 */
+  max-width: 30vw;
+  transition: filter 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+  will-change: opacity, filter;
+}
+
+.gal-sprite img {
+  height: 100%;
+  width: auto;
+  /* 与父级的 max-width 配合：父级限宽后图要跟着缩，不能溢出。
+     object-fit 保证是等比缩放而不是拉伸。 */
+  max-width: 100%;
+  object-fit: contain;
+  object-position: bottom;
+  /* 立绘底部与画面底边之间留一点点渐隐，避免切边的硬感 */
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* 槽位：中间居中，左右各留 3% 边距。
+   用 transform 做居中而不是 margin-left，是为了让 transition 能作用在同一个属性上。 */
+.gal-sprite.pos-center { left: 50%; transform: translateX(-50%); }
+.gal-sprite.pos-right  { right: 3%; }
+.gal-sprite.pos-left   { left: 3%; }
+
+/* 说话人：全亮，并微微上抬（他站出来了一点） */
+.gal-sprite.is-active {
+  filter: none;
+  opacity: 1;
+}
+
+/* 旁听者：压暗 + 轻微去色。
+   不用 opacity 压暗——opacity 会让角色变透明，看起来像幽灵；
+   brightness/grayscale 才是退到光线外的观感。
+   去色强度刻意压得很轻（0.25）：调到 0.42 时青梧（青）会变成一团中性灰，
+   在紫色背景上像没渲染出来。旁听者应当「暗下来」，不是「变成灰影」。 */
+.gal-sprite.is-idle {
+  filter: brightness(0.62) grayscale(0.25) blur(0.3px);
+  opacity: 1;
+}
+
+/* 暂退（旁白/玩家发言）：真正离场。
+   保留 DOM 是刻意的——这是位置记忆能生效的前提（见 stage.ts 注释）。 */
+.gal-sprite.is-hidden {
+  opacity: 0;
+  transform: translateX(-50%) scale(0.985);
+}
+
+/* 左右槽位的暂退不能套用 center 的 translateX(-50%)，否则会横向跳位 */
+.gal-sprite.pos-left.is-hidden,
+.gal-sprite.pos-right.is-hidden {
+  transform: scale(0.985);
+}
+
+/* ── 场景标签（z-30，在文本框之上）── */
+.gal-place-warn {
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #e8a86a;
+  background: rgba(232, 168, 106, 0.14);
+  border: 1px solid rgba(232, 168, 106, 0.5);
+  border-radius: 3px;
+}
+
+/* ── 有立绘时文本框的可读性补强 ──
+   立绘会挡在文本框后面，浅色立绘 + 浅色文字容易糊。
+   文本框自身已有半透明底，这里再加一层更实的底，保证对比度。 */
+.gal-root.has-cast .gal-textbox {
+  background: rgba(10, 11, 16, 0.88);
+  backdrop-filter: blur(2px);
+}
+
+/* ── 小屏：立绘缩一点，避免三个人挤成一团 ── */
+@media (max-width: 640px) {
+  .gal-sprite { height: 76%; }
+  .gal-sprite.pos-left  { left: 0; }
+  .gal-sprite.pos-right { right: 0; }
+}
+

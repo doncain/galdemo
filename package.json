@@ -1,0 +1,30 @@
+{
+  "name": "minigal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "minigal - galgame 楼层剧本前端（S2 交付层）",
+  "scripts": {
+    "build": "webpack --mode production && node scripts/inline.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\"",
+    "typecheck": "tsc --noEmit",
+    "verify:delivery": "node scripts/verify-delivery.mjs",
+    "serve": "node scripts/serve.mjs",
+    "publish:check": "node scripts/publish.mjs --dry-run",
+    "publish": "node scripts/publish.mjs"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "css-loader": "^7.1.5",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.6.2",
+    "typescript": "^5.9.3",
+    "webpack": "^5.111.0",
+    "webpack-cli": "^7.2.3"
+  }
+}

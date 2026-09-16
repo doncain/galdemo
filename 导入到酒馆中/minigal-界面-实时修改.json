@@ -1,0 +1,18 @@
+{
+  "_说明": "minigal 界面正则（实时修改版）——结构和正式版完全一样，只把 URL 换成本机服务、并默认禁用。开发时启用它、禁用正式版；交付给玩家前必须确认它是 disabled。",
+  "id": "b2e1d4c3-8c75-4f29-8d6b-3e4f7a9b01c2",
+  "scriptName": "minigal-界面",
+  "findRegex": "/[\\s\\S]*/s",
+  "replaceString": "```\n<body>\n<script>\n$('body').load('http://localhost:5173/dist/yaoguai/minigal/index.html')\n</script>\n</body>\n```",
+  "placement": [
+    2
+  ],
+  "disabled": true,
+  "markdownOnly": true,
+  "promptOnly": false,
+  "runOnEdit": false,
+  "substituteRegex": false,
+  "minDepth": null,
+  "maxDepth": null,
+  "trimStrings": []
+}

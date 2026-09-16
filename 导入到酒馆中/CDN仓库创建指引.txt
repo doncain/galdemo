@@ -1,0 +1,273 @@
+========================================================
+ minigal · 创建 CDN 仓库（从零到能上线）
+========================================================
+
+这份指引解决一件事：让「正式版」界面正则有一个真实可用的 CDN 地址。
+在此之前，minigal-界面-正式.json 里是占位符，不能用于交付。
+
+--------------------------------------------------------
+ 先理解它是怎么工作的（30 秒，理解了就不会做错）
+--------------------------------------------------------
+
+楼层文本 → 正则替换成一段代码块 → 酒馆助手提升为 iframe
+        → iframe 里 $.load(某个 URL) → 拉单文件 HTML → 渲染成画面
+
+那个 URL 就是 CDN 地址，形如：
+
+  https://cdn.jsdelivr.net/gh/<用户名>/<仓库名>@master/dist/yaoguai/minigal/index.html
+
+三个关键点：
+
+  ① jsDelivr 自己不做托管。它只做一件事：把 GitHub 仓库的文件
+     按路径映射成一个带缓存的 URL。所以「发布」= 把文件推到 GitHub，
+     没有别的魔法，也不需要注册 jsDelivr 账号。
+
+  ② @master 后面那一段是**仓库内的文件路径**，必须与构建产物完全一致：
+       dist/yaoguai/minigal/index.html
+     路径写错 = CDN 返回 404 = 酒馆里一片空白。
+
+  ③ 仓库必须是 **公开（Public）**。私有仓库的 CDN 地址拉不到，
+     这是新手最常踩的坑。
+
+
+========================================================
+ 第一步：在 GitHub 建一个空仓库
+========================================================
+
+  1. 打开 https://github.com/new
+
+  2. 填写：
+
+        Repository name : minigal          ← 名字随意，记住它
+        Description     : （可留空）
+        Public / Private: ★ 选 Public       ← 必须公开
+        Add a README file              : 不勾
+        Add .gitignore                 : None
+        Choose a license               : None
+
+  3. 点 Create repository
+
+  ★ 后三项务必都不要勾。
+    勾了 README / gitignore / license 会生成一个初始提交，
+    本地推送时需要先 pull 合并，凭空多出一道麻烦。
+    建好后看到「Quick setup」页面（上面有仓库地址）就是对的。
+
+  4. 从那个页面复制仓库地址，形如：
+
+        https://github.com/<用户名>/minigal.git
+
+     注意用 HTTPS 这种（不是 SSH 的 git@github.com:...）。
+     SSH 需要配密钥，HTTPS 最多多输一次密码。
+
+
+========================================================
+ 第二步：把本地目录变成 git 仓库并连上它
+========================================================
+
+在项目根目录执行（也就是包含 package.json 的 minigal 目录）：
+
+  cd "C:/Users/24015/WorkBuddy/2026-09-15-15-57-04/minigal"
+
+  git init
+  git remote add origin https://github.com/<用户名>/minigal.git
+
+把 <用户名> 和仓库名换成你自己的。然后核对一下：
+
+  git remote -v
+  → 应当打印两行（fetch / push），地址都对
+
+  git rev-parse --is-inside-work-tree
+  → 打印 true
+
+★ 顺序不要反：先 git init 再 remote add。
+  反过来会报「not a git repository」。
+
+
+========================================================
+ 第三步：确认 .gitignore 挡好了不该上传的东西
+========================================================
+
+★ 好消息：这份 .gitignore 已经实测核对过，**不需要你改**。
+  已确认的结果（用临时仓库跑 git status 验的）：
+
+    会进仓库（应当如此）：
+      dist/yaoguai/minigal/index.html   ← CDN 要拿的就是它
+      导入到酒馆中/                      ← 两个正则 json + 说明
+      src/  scripts/  package.json 等源码与配置
+
+    不进仓库（应当如此）：
+      node_modules/        依赖，几百 MB
+      dist/dump*.html      无头浏览器的 DOM 快照
+      dist/shots/          验收截图
+      dist-test/           测试编译产物
+
+  想自己复核一遍的话，往下看；不想看可以直接跳到第四步。
+
+--------------------------------------------------------
+ 自查（可选）
+--------------------------------------------------------
+
+在项目根目录执行：
+
+  git -c core.quotepath=false status --porcelain --untracked-files=all
+
+检查输出里有没有这一行（应当出现）：
+
+  ?? dist/yaoguai/minigal/index.html
+
+如果这一行没出现，说明被 .gitignore 挡了，去改 .gitignore。
+
+★ 两个必加的参数，不加会误判：
+  --untracked-files=all
+      默认模式下，未跟踪的**目录**会被折叠成一行（只显示 `?? dist/`），
+      看不到目录里的具体文件。我曾因此误以为「产物被忽略了」，
+      其实是没展开。
+  -c core.quotepath=false
+      git 默认会把中文文件名转义成八进制（`"\345\257\274\345\205\245..."`），
+      想按文件名找「导入到酒馆中/」这类路径时会匹配不到。
+
+★ 有一条底线要记住：
+  **dist/yaoguai/minigal/index.html 必须能进仓库。**
+  反过来说，绝不要在 .gitignore 里写 `dist/` ——
+  那样 CDN 上会 404，而你会以为「jsDelivr 坏了」。
+
+
+========================================================
+ 第四步：首次推送
+========================================================
+
+先确认一下本地的默认分支名：
+
+  git branch --show-current
+
+  → 打印 master 或 main。**刚 git init 的瞬间也能用**（本机 git 2.54 实测）。
+
+  如果它打印为空，用这条兜底：
+
+  git symbolic-ref --short HEAD
+
+★ 不要用 `git rev-parse --abbrev-ref HEAD`：
+  在还没有任何提交的空仓库上它会报
+  「fatal: ambiguous argument 'HEAD'」或打印 HEAD，拿不到分支名。
+  而首次操作时你正好处在空仓库状态。
+
+现在按分支名推：
+
+  git add .
+  git commit -m "chore: minigal 初始提交"
+  git push -u origin master        ← 若上面显示 main，这里改成 main
+
+★ 关于 master / main：
+  正式版 json 里的 CDN 地址写的是 @master。
+  如果本地默认分支是 main，有两条路——
+    简单：把 json 里的 @master 改成 @main
+    省事：把分支改名成 master（git branch -M master），两边一致
+  两者不能混。地址写 @master 而仓库没有 master 分支 = 404。
+
+  推送成功后再核对一次（这次一定准）：
+
+    git branch --show-current
+    git ls-remote --heads origin
+
+★ 首次推送会要求登录 GitHub。
+  用 HTTPS 方式推时，git 会弹出浏览器让你授权，或在终端索要
+  「用户名 + Personal Access Token（不是账号密码）」。
+  GitHub 从 2021 年起不再接受账号密码推送，只认 token。
+  生成入口：https://github.com/settings/tokens
+  选 classic → 勾 `repo` 权限 → 生成后复制那串字符当密码用。
+  （如果弹的是浏览器授权页，按提示点确认即可，不用手搓 token。）
+
+
+========================================================
+ 第五步：填掉那个占位符
+========================================================
+
+打开 导入到酒馆中/minigal-界面-正式.json，
+把 replaceString 里的：
+
+  https://cdn.jsdelivr.net/gh/REPLACE_ME_USER/REPLACE_ME_REPO@master/dist/yaoguai/minigal/index.html
+
+改成：
+
+  https://cdn.jsdelivr.net/gh/<用户名>/<仓库名>@master/dist/yaoguai/minigal/index.html
+
+这是整个文件里**唯一**需要改的地方（只有这一处占位符）。
+
+改完自查：
+
+  node scripts/verify-delivery.mjs
+
+看到这一条从 FAIL 变 PASS 就成了：
+
+  正式 · CDN 地址已填真实仓库
+
+--------------------------------------------------------
+ 第六步：验证 CDN 真的通了
+--------------------------------------------------------
+
+推完之后**不要立刻**去酒馆试——jsDelivr 对新提交需要几十秒回源。
+先在浏览器打开那个 URL，或者用命令行核对：
+
+  PowerShell:
+    (Invoke-WebRequest "<你的CDN地址>").RawContentLength
+
+  Node:
+    node -e "fetch('<你的CDN地址>').then(r=>r.text()).then(t=>console.log(t.length))"
+
+把打印出的字节数与本地产物对比，两者必须相等：
+
+  PowerShell:
+    (Get-Item "dist/yaoguai/minigal/index.html").Length
+
+  Node:
+    node -e "console.log(require('fs').statSync('dist/yaoguai/minigal/index.html').size)"
+
+★ 字节数不等 = 推送的不是最新产物，或者 CDN 还在旧缓存。
+  这时先重新构建 + 重新发布（见文末「日常更新」），再核对。
+
+
+========================================================
+ 日常更新（以后改了代码要让玩家看到）
+========================================================
+
+项目里的 scripts/publish.mjs 已经把这件事自动化了，且带硬检查：
+
+  ① npm run build                       构建
+  ② node scripts/publish.mjs --dry-run  只检查，不提交（推荐）
+  ③ node scripts/publish.mjs            检查 + 提交 + 推送
+  ④ 按脚本打印的提示核对 CDN 字节数
+  ⑤ 需要立刻生效时，打开脚本给出的 purge 链接刷缓存
+     （不刷则玩家最多 12 小时内自动拿到新版）
+
+它会替你挡住两个常见事故：
+
+  · 产物比源码旧（改了代码没重新构建）→ 拒绝发布
+  · CDN 地址还是 REPLACE_ME → 拒绝发布
+
+★ 纪律：构建和发布不要串在同一条命令里。
+  让构建完整跑完，再单独执行发布。
+
+
+========================================================
+ 出问题时的排查表
+========================================================
+
+  现象                        最可能的原因
+  ────────────────────────────────────────────────────────
+  CDN 地址打开是 404          ① 路径写错（要含 dist/yaoguai/minigal/）
+                              ② 分支名不符（@master vs 实际 main）
+                              ③ 仓库是 Private
+                              ④ 文件还没推上去 / 还没回源（等 30 秒）
+
+  地址打开是源码文本          URL 指到了 index.html 之外的文件
+
+  酒馆里一片空白，无报错      仓库 Private，或 URL 路径错
+                              → 打开 DevTools 看 iframe 里的请求
+
+  本机能用、CDN 不能用        用「实时修改」那条正则验证过了，
+                              问题只在 CDN 侧（路径/可见性/分支）
+
+  改了代码但玩家看到的还是旧版 ① 没重新构建
+                              ② 没刷 CDN 缓存（最多等 12 小时自动更新）
+
+========================================================

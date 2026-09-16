@@ -1,0 +1,30 @@
+# ── 发布产物：必须提交 ──────────────────────────────────────────
+# 这一条是「否定式」的说明，不是规则。jsDelivr 靠仓库路径映射 CDN URL，
+# 所以 dist/ 必须进仓库。反过来说：不要试图 ignore dist/，那样 CDN 上会 404。
+# （.gitignore 里写注释不会被当成规则，放心。）
+
+# ── 依赖 ────────────────────────────────────────────────────────
+node_modules/
+
+# ── 构建中间产物 ────────────────────────────────────────────────
+# dist/yaoguai/minigal/index.js 是 inline.mjs 消费完就删的中间文件；
+# 若某次构建中途失败留下它，不要提交（CDN 上不该有第二个可加载文件）。
+dist/yaoguai/minigal/index.js
+dist/yaoguai/minigal/*.LICENSE.txt
+
+# ── 本地开发与验收杂质 ──────────────────────────────────────────
+# 无头浏览器 dump 出的 DOM 快照。用通配而不是逐个列名：
+# 早先只写了 dist/dump.html，后来验收脚本拆成 dump-s1.html / dump-s3.html，
+# 新文件没被挡住会跟着提交进仓库（几百 KB 的 HTML，且毫无用途）。
+# 通配一劳永逸。
+dist/dump*.html
+dist/shots/
+dist/*.png
+dist-test/
+
+# ── 编辑器 / 系统 ───────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

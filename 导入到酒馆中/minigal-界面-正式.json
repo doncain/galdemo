@@ -1,0 +1,18 @@
+{
+  "_说明": "minigal 界面正则（正式版）——把每一层的楼层文本整段替换成一个 iframe。placement 必须为 [2]（仅显示层），改了会污染提示词。导入方式见同目录 导入说明.txt。",
+  "id": "a1f0c3d2-7b64-4e18-9c5a-2d3e6f8a90b1",
+  "scriptName": "minigal-界面",
+  "findRegex": "/[\\s\\S]*/s",
+  "replaceString": "```\n<body>\n<script>\n$('body').load('https://cdn.jsdelivr.net/gh/doncain/galdemo@master/dist/yaoguai/minigal/index.html')\n</script>\n</body>\n```",
+  "placement": [
+    2
+  ],
+  "disabled": false,
+  "markdownOnly": true,
+  "promptOnly": false,
+  "runOnEdit": false,
+  "substituteRegex": false,
+  "minDepth": null,
+  "maxDepth": null,
+  "trimStrings": []
+}
