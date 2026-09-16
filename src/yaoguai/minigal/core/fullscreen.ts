@@ -1,23 +1,27 @@
-// minigal · 伪全屏 + iframe 高度守卫（S6）
+// minigal · 伪全屏 + iframe 尺寸守卫（S6）
 //
 // ── 它解决什么问题 ─────────────────────────────────────────────
-// 酒馆把楼层里的代码块提升成 iframe 后，iframe 的高度由酒馆决定。
-// 默认它只给一个很矮的高度，于是我们的 .gal-root（height:100%）只能填满
-// 那一条窄缝——表现为「只看到背景顶部 + 文本框，画面被切掉」。
+// 酒馆把楼层里的代码块提升成 iframe 后，iframe 的尺寸由酒馆决定。
+// 它给的往往又矮又窄，于是我们的 .gal-root（width/height:100%）
+// 只能填满那一条缝——表现为「画面被切掉」。
 //
-// 这不是我们 CSS 的问题：内部高度链是通的（html/body → #root → .gal-app
-// → .gal-root 全是 100%）。缺的是**外部那一环**：iframe 自己的高度没人撑。
+// 这不是我们 CSS 的问题：内部高度链是通的
+// （html/body → #root → .gal-app → .gal-root 全是 100%）。
+// 缺的是**外部那一环**：iframe 自己的尺寸没人撑。
 //
-// 修法：从 iframe 内部访问 window.parent，直接把 iframe 元素的高度设成
-// 合理值。同源前提下可行（酒馆的楼层 iframe 与主页面同源）。
+// 修法：从 iframe 内部访问 window.parent，直接改 iframe 元素的尺寸。
 //
-// ── 两个能力 ───────────────────────────────────────────────────
-//   ① 高度守卫（自动，无需用户操作）：把 iframe 撑到 ~800px 或视口高度
-//   ② 伪全屏（按钮触发）：藏掉其它楼层，让本楼铺满视口
+// ── 两条通道，先 jQuery 后原生 ─────────────────────────────────
+// 文档的参考实现只走 `window.parent.$`。但那要求父页确实暴露了 jQuery；
+// 若酒馆那边没有（或换了实现），守卫会静默失效——而「静默失效」正是本项目
+// 最忌讳的失败形态。所以这里补一条**原生 DOM 通道**：
+//   · 有 window.parent.$ → 走 jQuery（与文档一致，兼容父页的既有习惯）
+//   · 没有但能读 window.parent.document → 直接改 iframe.style
+//   · 两者都不行 → 明确记录「受阻」，并在界面上说出来（不静默）
 //
 // ── 纪律 ───────────────────────────────────────────────────────
-// 一切父页操作都判空降级：裸跑预览、跨域、酒馆结构变化时**必须静默放弃**，
-// 绝不能让「撑高度失败」把整个界面搞崩。所有父页访问都包在 try 里。
+// 一切父页操作都判空降级：裸跑预览、跨域、沙箱、酒馆结构变化时**必须静默放弃**，
+// 绝不能让「撑高失败」把整个界面搞崩。所有父页访问都包在 try 里。
 
 const STYLE_ID = 'minigal-fs-hide';
 
@@ -27,12 +31,24 @@ declare global {
   }
 }
 
-/** 父页 jQuery（同源前提）。拿不到 → 返回 null，后续所有父页操作放弃。 */
+/** 父页 jQuery（同源前提）。拿不到 → null。 */
 export function getParentJQuery(): any | null {
   try {
     if (window.parent && window.parent !== window) {
       const p$ = (window.parent as any).$;
       if (p$) return p$;
+    }
+  } catch {
+    /* 跨域 */
+  }
+  return null;
+}
+
+/** 父页 document（同源前提）。跨域/沙箱时访问会抛错 → null。 */
+export function getParentDocument(): Document | null {
+  try {
+    if (window.parent && window.parent !== window) {
+      return (window.parent as any).document ?? null;
     }
   } catch {
     /* 跨域 */
@@ -49,33 +65,119 @@ export function getSelfIframe(): HTMLIFrameElement | null {
   }
 }
 
-/** 是否运行在酒馆的 iframe 里（撑高度是否可行取决于此） */
-export function inTavernIframe(): boolean {
-  return Boolean(getSelfIframe() && getParentJQuery());
+/** 父页视口尺寸。拿不到 → null。 */
+function parentViewport(): { w: number; h: number } | null {
+  try {
+    const p = window.parent;
+    if (!p) return null;
+    return { w: p.innerWidth, h: p.innerHeight };
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 诊断状态：守卫每一步的结果都记在这里，界面据此显示「撑高 已生效 / 受阻」
+// ─────────────────────────────────────────────────────────────
+
+export type SizeStatus = 'ok' | 'no-iframe' | 'no-parent' | 'blocked' | 'write-failed';
+
+export interface SizeDiag {
+  /** 是否在 iframe 里（self !== top） */
+  inIframe: boolean;
+  /** window.frameElement 是否可读 */
+  hasFrameElement: boolean;
+  /** window.parent.document 是否可读（同源/非沙箱） */
+  parentDocReadable: boolean;
+  /** window.parent.$ 是否存在 */
+  hasParentJQuery: boolean;
+  /** 实际使用的通道 */
+  channel: 'jquery' | 'native' | 'none';
+  /** iframe 当前实际尺寸（父页坐标系） */
+  rect: { w: number; h: number } | null;
+  /** 计算出的目标高度 */
+  targetH: number;
+  /** 最后一次成功写入的高度；0 = 没写过 */
+  writtenH: number;
+  status: SizeStatus;
+  note: string;
+}
+
+const diag: SizeDiag = {
+  inIframe: false,
+  hasFrameElement: false,
+  parentDocReadable: false,
+  hasParentJQuery: false,
+  channel: 'none',
+  rect: null,
+  targetH: 0,
+  writtenH: 0,
+  status: 'no-iframe',
+  note: '未初始化',
+};
+
+function refreshDiagStatic(): void {
+  diag.inIframe = (() => {
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true;
+    }
+  })();
+  diag.hasFrameElement = Boolean(getSelfIframe());
+  const pd = getParentDocument();
+  diag.parentDocReadable = Boolean(pd);
+  diag.hasParentJQuery = Boolean(getParentJQuery());
+  diag.channel = diag.hasParentJQuery ? 'jquery' : pd ? 'native' : 'none';
+}
+
+/** 供界面读取的诊断快照。每次调用都重新测量实际尺寸，保证不是过期数据。 */
+export function diagnoseSize(): SizeDiag {
+  refreshDiagStatic();
+  const iframe = getSelfIframe();
+  if (iframe) {
+    try {
+      const r = iframe.getBoundingClientRect();
+      diag.rect = { w: Math.round(r.width), h: Math.round(r.height) };
+    } catch {
+      diag.rect = null;
+    }
+  }
+  if (!diag.inIframe) {
+    diag.status = 'no-iframe';
+    diag.note = '不在 iframe 里（浏览器裸跑）。高度由窗口决定，属正常。';
+  } else if (!iframe) {
+    diag.status = 'blocked';
+    diag.note = '在 iframe 里但读不到 frameElement——沙箱或跨域限制，无法从内部改尺寸。';
+  } else if (diag.channel === 'none') {
+    diag.status = 'blocked';
+    diag.note = 'iframe 存在，但父页 document 与 jQuery 都读不到——跨域或沙箱。';
+  } else if (diag.writtenH === 0) {
+    diag.status = 'write-failed';
+    diag.note = '通道可用，但还没有成功写入过尺寸（守卫可能没跑起来）。';
+  } else {
+    diag.status = 'ok';
+    diag.note = `已通过 ${diag.channel} 通道写入高度 ${diag.writtenH}px。`;
+  }
+  return { ...diag };
 }
 
 /**
  * 目标高度。
  *
  * 取「视口高度 - 20」与 800 的较小值，并保证不低于 400：
- *   · 减去 20 是给楼层容器留一点余量，避免撑出双滚动条；
- *   · 封顶 800 是因为再高就超出一般人的阅读范围，且会把页面拉得很长；
- *   · 下限 400 是为了极端矮的视口下仍然能看到完整的一屏。
- *
- * 拿不到父页视口时（跨域/裸跑）返回 800 —— 此时这个值根本不会用到。
+ *   · 减去 20 是给楼层容器留余量，避免撑出双滚动条；
+ *   · 封顶 800 是因为再高就超出阅读范围，且会把页面拉得很长；
+ *   · 下限 400 是为了极端矮的视口下仍能看到完整一屏。
  */
 function computeTargetHeight(isMobile: boolean): number {
   const defaultH = isMobile ? 700 : 800;
-  try {
-    const parentH = window.parent.innerHeight;
-    if (parentH > 0 && parentH < defaultH + 40) return Math.max(400, parentH - 20);
-  } catch {
-    /* 跨域 */
-  }
+  const vp = parentViewport();
+  if (vp && vp.h > 0 && vp.h < defaultH + 40) return Math.max(400, vp.h - 20);
   return defaultH;
 }
 
-/** 自己所在的楼层容器（.mes[mesid]）。父页查询失败就退回取最后一楼。 */
+/** 自己所在的楼层容器。jQuery 通道失败时回退 null（原生通道走 parentElement）。 */
 function closestMes(p$: any) {
   const iframe = getSelfIframe();
   return iframe ? p$(iframe).closest('.mes') : p$('#chat .mes').last();
@@ -83,44 +185,51 @@ function closestMes(p$: any) {
 
 /* ── 进入伪全屏：CSS 藏楼 + .mes 顶满视口 + 原生全屏尽力而为 ── */
 export async function enterFullscreen(): Promise<boolean> {
+  const iframe = getSelfIframe();
   const p$ = getParentJQuery();
-  if (!p$) return false;
+  const pd = getParentDocument();
+  if (!iframe || (!p$ && !pd)) return false;
+
   try {
-    const $mes = closestMes(p$);
+    const $mes = p$ ? closestMes(p$) : null;
+    const mesEl: HTMLElement | null = $mes ? $mes[0] : (iframe.closest('.mes') as HTMLElement | null);
+    const floorId = mesEl?.getAttribute('mesid') ?? null;
 
     // 藏掉其它楼层：只留自己这一楼。
     // 用楼层号而不是「保留最后一个」，这样「回到历史楼层」时也对。
-    let hide = p$(`#${STYLE_ID}`);
-    if (hide.length === 0) hide = p$(`<style id="${STYLE_ID}"></style>`).appendTo('head');
-    const floorId = $mes.attr('mesid');
-    hide.text(
-      floorId
+    if (pd) {
+      let styleEl = pd.getElementById(STYLE_ID) as HTMLStyleElement | null;
+      if (!styleEl) {
+        styleEl = pd.createElement('style');
+        styleEl.id = STYLE_ID;
+        pd.head.appendChild(styleEl);
+      }
+      styleEl.textContent = floorId
         ? `#chat .mes:not([mesid="${floorId}"]) { display: none !important; }`
-        : `#chat .mes { display: none !important; }`,
-    );
+        : `#chat .mes { display: none !important; }`;
+    }
 
-    $mes.css({
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      width: '100vw',
-      height: '100vh',
-      'z-index': 99999,
-      'max-width': 'none',
-      'max-height': 'none',
-    });
+    if (mesEl) {
+      mesEl.style.position = 'fixed';
+      mesEl.style.top = '0';
+      mesEl.style.left = '0';
+      mesEl.style.width = '100vw';
+      mesEl.style.height = '100vh';
+      mesEl.style.zIndex = '99999';
+      mesEl.style.maxWidth = 'none';
+      mesEl.style.maxHeight = 'none';
+    }
 
-    const iframe = getSelfIframe();
-    if (iframe) p$(iframe).css({ width: '100%', height: '100%' });
+    setIframeSize(iframe, '100%', '100%');
 
     (window as any).__minigalFullscreen = true;
 
     // 原生全屏尽力而为：被浏览器策略拒绝也无妨，
-    // 上面的 CSS 已经把画面铺满了（这叫「伪全屏」的兜底价值）。
+    // 上面的 CSS 已经把画面铺满了（这是「伪全屏」兜底的价值）。
     try {
       await document.documentElement.requestFullscreen();
     } catch {
-      /* 伪造全屏兜底 */
+      /* 伪全屏兜底 */
     }
     return true;
   } catch (e) {
@@ -129,10 +238,12 @@ export async function enterFullscreen(): Promise<boolean> {
   }
 }
 
-/* ── 退出：清样式 + 摘注入 + 复位标志 + 重撑高度 ── */
-export async function exitFullscreen(restoreH?: () => void): Promise<void> {
+/* ── 退出：清样式 + 复位 + 重撑尺寸 ── */
+export async function exitFullscreen(restoreSize?: () => void): Promise<void> {
+  const iframe = getSelfIframe();
   const p$ = getParentJQuery();
-  if (!p$) return;
+  const pd = getParentDocument();
+  if (!iframe) return;
   try {
     if (document.fullscreenElement) {
       try {
@@ -141,34 +252,54 @@ export async function exitFullscreen(restoreH?: () => void): Promise<void> {
         /* noop */
       }
     }
-    const $mes = closestMes(p$);
-    $mes.css({
-      position: '',
-      top: '',
-      left: '',
-      width: '',
-      height: '',
-      'z-index': '',
-      'max-width': '',
-      'max-height': '',
-    });
-    p$(`#${STYLE_ID}`).remove();
+    const mesEl = p$ ? closestMes(p$)[0] : (iframe.closest('.mes') as HTMLElement | null);
+    if (mesEl) {
+      for (const k of ['position', 'top', 'left', 'width', 'height', 'zIndex', 'maxWidth', 'maxHeight']) {
+        (mesEl.style as any)[k] = '';
+      }
+    }
+    pd?.getElementById(STYLE_ID)?.remove();
     (window as any).__minigalFullscreen = false;
-    // 退出后要重撑一次高度：全屏期间守卫是跳过的，
-    // 复位后 iframe 可能停在错误高度（需要连补几次修竞态）。
-    restoreH?.();
+    // 退出后要重撑一次：全屏期间守卫是跳过的，
+    // 复位后 iframe 可能停在错误尺寸（需要连补几次修竞态）。
+    restoreSize?.();
   } catch (e) {
     console.warn('[minigal] 退出全屏失败', e);
   }
 }
 
-/* ── iframe 高度守卫 ──
+/**
+ * 写 iframe 尺寸的唯一出口。两条通道都试，成功即止。
+ *
+ * 返回是否写入成功（用于诊断）。判定「成功」只认一件事：
+ * **写完再读回来，值确实变了或已经正确。**
+ * 只检查「没有抛错」是不够的——被外部覆盖时会误报成功。
+ */
+function setIframeSize(iframe: HTMLIFrameElement, width: string, height: string): boolean {
+  const p$ = getParentJQuery();
+  let wrote = false;
+  try {
+    if (p$) {
+      p$(iframe).css({ width, height });
+      wrote = true;
+    } else {
+      iframe.style.width = width;
+      iframe.style.height = height;
+      wrote = true;
+    }
+  } catch {
+    wrote = false;
+  }
+  return wrote;
+}
+
+/* ── iframe 尺寸守卫 ──
  *
  * 事件驱动，**不做定时轮询**。理由：
- *   · 轮询会在「酒馆自己改高度」时与之互抢，表现为画面抖动；
+ *   · 轮询会在「酒馆自己改尺寸」时与之互抢，表现为画面抖动；
  *   · 楼层很多时每楼一个定时器，页面会被拖慢。
- * 改为监听 iframe 的 style 变化 + body 尺寸变化，只在需要时写一次，
- * 且差值 ≤1px 就不写（避免无谓的重排与观察者自激）。
+ * 改为监听 iframe 的 style 变化 + 父元素变化 + body 尺寸变化，
+ * 只在需要时写一次，且差值 ≤1px 就不写（避免无谓重排与观察者自激）。
  */
 export interface GuardHandle {
   force(): void;
@@ -176,23 +307,60 @@ export interface GuardHandle {
   destroy(): void;
 }
 
-export function startHeightGuard(isMobile: boolean): GuardHandle {
+export function startSizeGuard(isMobile: boolean): GuardHandle {
   const noop: GuardHandle = { force() {}, burst() {}, destroy() {} };
-  const p$ = getParentJQuery();
   const iframe = getSelfIframe();
-  if (!p$ || !iframe) return noop;
+  refreshDiagStatic();
+  if (!iframe || diag.channel === 'none') {
+    diag.status = diag.inIframe ? 'blocked' : 'no-iframe';
+    diag.note = diag.inIframe
+      ? 'iframe 存在，但父页 document 与 jQuery 都读不到——跨域或沙箱，无法从内部改尺寸。'
+      : '不在 iframe 里（浏览器裸跑）。';
+    return noop;
+  }
 
   let rafId = 0;
   let destroyed = false;
 
-  const applyHeight = () => {
+  const applySize = () => {
     if (destroyed || (window as any).__minigalFullscreen) return; // 全屏时跳过，别跟 100% 打架
     try {
       const targetH = computeTargetHeight(isMobile);
-      const cur = p$(iframe).height();
-      if (Math.abs(cur - targetH) > 1) p$(iframe).css({ height: `${targetH}px` });
-    } catch {
-      /* noop */
+      diag.targetH = targetH;
+
+      const rect = iframe.getBoundingClientRect();
+      const curH = Math.round(rect.height);
+      const curW = Math.round(rect.width);
+
+      // 目标宽度：父容器（.mes）的内容宽度。取不到就退回 100%。
+      // 宽度也要管，因为酒馆给的 iframe 未必是整宽——「画面被切」不只有高度一个维度。
+      let targetW: string | null = null;
+      const parentEl = iframe.parentElement;
+      if (parentEl) {
+        const pw = Math.round(parentEl.clientWidth);
+        if (pw > 0 && Math.abs(curW - pw) > 2) targetW = '100%';
+      }
+
+      const needH = Math.abs(curH - targetH) > 1;
+      const needW = targetW !== null;
+      if (!needH && !needW) return; // 已达标，不写（避免观察者自激）
+
+      const ok = setIframeSize(iframe, targetW ?? '100%', `${targetH}px`);
+
+      // 写完再读回来验证。只看「没抛错」会误报成功——
+      // 外部若立刻覆盖，抛错与否都看不出来。
+      const after = Math.round(iframe.getBoundingClientRect().height);
+      if (ok && Math.abs(after - targetH) <= 2) {
+        diag.writtenH = targetH;
+        diag.status = 'ok';
+        diag.note = `已通过 ${diag.channel} 通道写入高度 ${targetH}px。`;
+      } else {
+        diag.status = 'write-failed';
+        diag.note = `写入 ${targetH}px 后读回 ${after}px——尺寸被外部覆盖了。`;
+      }
+    } catch (e) {
+      diag.status = 'write-failed';
+      diag.note = '写入尺寸时抛错：' + String((e as Error)?.message || e).slice(0, 80);
     }
   };
 
@@ -200,16 +368,16 @@ export function startHeightGuard(isMobile: boolean): GuardHandle {
     if (rafId || destroyed) return;
     rafId = requestAnimationFrame(() => {
       rafId = 0;
-      applyHeight();
+      applySize();
     });
   };
 
-  applyHeight();
+  applySize();
 
   const observers: MutationObserver[] = [];
   try {
     const o = new MutationObserver(schedule);
-    o.observe(iframe, { attributes: true, attributeFilter: ['style'] });
+    o.observe(iframe, { attributes: true, attributeFilter: ['style', 'height', 'width'] });
     observers.push(o);
   } catch {
     /* noop */
@@ -233,12 +401,12 @@ export function startHeightGuard(isMobile: boolean): GuardHandle {
   window.addEventListener('resize', onResize);
 
   return {
-    force: applyHeight,
-    // 连补三次修竞态：退出全屏那一刻别的代码也在改高度，单次写可能被盖掉
+    force: applySize,
+    // 连补三次修竞态：退出全屏那一刻别的代码也在改尺寸，单次写可能被盖掉
     burst: () => {
-      applyHeight();
-      setTimeout(applyHeight, 100);
-      setTimeout(applyHeight, 200);
+      applySize();
+      setTimeout(applySize, 100);
+      setTimeout(applySize, 200);
     },
     destroy: () => {
       destroyed = true;
@@ -246,7 +414,8 @@ export function startHeightGuard(isMobile: boolean): GuardHandle {
       observers.forEach((o) => o.disconnect());
       window.removeEventListener('resize', onResize);
       try {
-        p$(iframe).css({ height: '' });
+        setIframeSize(iframe, '', '');
+        diag.writtenH = 0;
       } catch {
         /* noop */
       }

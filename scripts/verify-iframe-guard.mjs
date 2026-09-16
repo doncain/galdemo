@@ -85,18 +85,22 @@ const out = document.getElementById('probe');
 
 // 有限次采样。绝不用 setInterval —— 见文件头的限制 ② 。
 function sample(){
-  out.dataset.height = String(Math.round(iframe.getBoundingClientRect().height));
+  const r = iframe.getBoundingClientRect();
+  out.dataset.height = String(Math.round(r.height));
+  out.dataset.iframew = String(Math.round(r.width));
+  const parentEl = iframe.parentElement;
+  out.dataset.parentw = String(parentEl ? Math.round(parentEl.clientWidth) : -1);
   try {
     const d = iframe.contentDocument;
     const root = d && d.querySelector('.gal-root');
     const badge = d && d.querySelector('[data-minigal="devbar-size"]');
     out.dataset.inner = root ? String(Math.round(root.getBoundingClientRect().height)) : 'none';
     out.dataset.badge = badge ? badge.textContent : 'none';
-    out.dataset.resizable = badge ? badge.getAttribute('data-resizable') : 'none';
+    out.dataset.status = badge ? badge.getAttribute('data-size-status') : 'none';
   } catch (e) {
     out.dataset.inner = 'ERR:' + e.message;
   }
-  out.textContent = 'h=' + out.dataset.height + ' inner=' + out.dataset.inner;
+  out.textContent = 'h=' + out.dataset.height + ' w=' + out.dataset.iframew + ' inner=' + out.dataset.inner;
 }
 sample();
 [300, 1000, 2500, 4500].forEach(t => setTimeout(sample, t));
@@ -164,14 +168,17 @@ try {
 
 const pick = (k) => (new RegExp(`data-${k}="([^"]*)"`).exec(dump) || [])[1] ?? '(缺)';
 const iframeH = Number(pick('height'));
+const iframeW = Number(pick('iframew'));
+const parentW = Number(pick('parentw'));
 const innerH = pick('inner');
 const badge = pick('badge');
-const resizable = pick('resizable');
+const status = pick('status');
 
-console.log(`  实测 iframe 高度   ${pick('height')}`);
+console.log(`  iframe 尺寸        ${iframeW} × ${iframeH}`);
+console.log(`  父容器宽度         ${parentW}`);
 console.log(`  应用内 .gal-root   ${innerH}`);
-console.log(`  撑高状态徽标       ${badge}`);
-console.log(`  data-resizable     ${resizable}\n`);
+console.log(`  诊断徽标           ${badge}`);
+console.log(`  data-size-status   ${status}\n`);
 
 let pass = 0;
 let fail = 0;
@@ -185,10 +192,11 @@ const ck = (label, ok, note = '') => {
   }
 };
 
-ck('① 守卫识别出酒馆环境（data-resizable=1）', resizable === '1', `实得 ${resizable}`);
-ck('① 应用内徽标显示「已生效」', /已生效/.test(badge), badge);
+ck('① 守卫识别出酒馆环境（status=ok）', status === 'ok', `实得 ${status}`);
+ck('① 徽标显示「已生效」', /已生效/.test(badge), badge);
 ck('② iframe 被撑高（不再是初始的 230）', iframeH > 400, `实得 ${iframeH}`);
 ck('② 撑到目标高度 ~800', iframeH >= 700 && iframeH <= 900, `实得 ${iframeH}`);
+ck('④ 宽度放到父容器整宽', Math.abs(iframeW - parentW) <= 3, `iframe ${iframeW} vs 父容器 ${parentW}`);
 ck(
   '③ 画面高度跟随（.gal-root 撑满 iframe）',
   Number(innerH) > 0 && Math.abs(Number(innerH) - iframeH) <= 4,

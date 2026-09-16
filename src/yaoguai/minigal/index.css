@@ -544,12 +544,19 @@ body {
   background: rgba(212, 183, 90, 0.12);
 }
 
-/* 撑高状态：只读提示，不可点 */
+/* 尺寸诊断：只读提示，不可点。
+   四种状态各上一种颜色 —— 绿=正常、灰=不该管（裸跑）、
+   红=真问题（受阻/被覆盖）。颜色本身就是诊断结论。 */
 .gal-devbar [data-minigal='devbar-size'] {
   color: #6d6a62;
   letter-spacing: 0.5px;
+  cursor: help;
 }
-.gal-devbar [data-minigal='devbar-size'][data-resizable='1'] {
+.gal-devbar [data-minigal='devbar-size'][data-size-status='ok'] {
   color: #7fbf7a;
+}
+.gal-devbar [data-minigal='devbar-size'][data-size-status='blocked'],
+.gal-devbar [data-minigal='devbar-size'][data-size-status='write-failed'] {
+  color: #e8888a;
 }
 

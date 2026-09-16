@@ -9,9 +9,10 @@ import type { ProbeResult } from './core/apiProbe';
 import {
   enterFullscreen,
   exitFullscreen,
-  inTavernIframe,
-  startHeightGuard,
+  diagnoseSize,
+  startSizeGuard,
   type GuardHandle,
+  type SizeDiag,
 } from './core/fullscreen';
 
 // 降级夹具 = 把严格夹具的 <content> 标签摘掉，其余原样。
@@ -59,18 +60,23 @@ export default function App() {
     readSearch('probe') === '1' ? runApiProbe() : null,
   );
 
-  // ── iframe 高度守卫（S6）──
-  // 在酒馆里：把 iframe 撑到 ~800px 或视口高度，否则画面被压成一条窄缝。
-  // 裸跑预览：父页拿不到 jQuery → 守卫自动 no-op，不影响本地开发。
+  // ── iframe 尺寸守卫（S6）──
+  // 在酒馆里：把 iframe 撑到 ~800px 或视口高度、并放到整宽，
+  // 否则画面被压成一条窄缝。裸跑预览时自动 no-op。
   const guardRef = useRef<GuardHandle | null>(null);
   const [isFs, setIsFs] = useState(false);
-  const [canResize, setCanResize] = useState(false);
+  // 诊断快照：让「撑高到底成没成、卡在哪一步」在界面上直接可见，
+  // 不用开 DevTools。这是刻意做的——「静默失效」是本项目最忌讳的形态。
+  const [sizeDiag, setSizeDiag] = useState<SizeDiag | null>(null);
 
   useEffect(() => {
-    const inIframe = inTavernIframe();
-    setCanResize(inIframe);
-    guardRef.current = startHeightGuard(false); // 手机端可传 true 用更矮的目标
+    guardRef.current = startSizeGuard(false); // 手机端可传 true 用更矮的目标
+    // 有限次采样（不用 setInterval：重复定时器会让无头验收的虚拟时间永不收敛）
+    const sample = () => setSizeDiag(diagnoseSize());
+    sample();
+    const timers = [300, 1200, 2500].map((t) => window.setTimeout(sample, t));
     return () => {
+      timers.forEach((t) => window.clearTimeout(t));
       guardRef.current?.destroy();
       guardRef.current = null;
     };
@@ -158,11 +164,15 @@ export default function App() {
           切换严格 / 降级
         </button>
 
-        {/* 窗口/高度状态（S6）：让「画面被压扁」这类问题一眼可诊断。
-            在酒馆里应当显示「撑高 已生效」；裸跑预览必然是「不可用」，
-            因为父页没有 jQuery，这时高度交给浏览器窗口，本来就正常。 */}
-        <span data-minigal="devbar-size" data-resizable={canResize ? '1' : '0'}>
-          {canResize ? '撑高 已生效' : '撑高 不可用（非酒馆环境）'}
+        {/* 尺寸诊断（S6）：让「画面被压扁」这类问题一眼可定位。
+            刻意显示得这么细，是因为它在不同环境下有 4 种失败形态，
+            光看「没生效」分不出是哪一种。 */}
+        <span
+          data-minigal="devbar-size"
+          data-size-status={sizeDiag?.status ?? 'pending'}
+          title={sizeDiag?.note ?? '检测中…'}
+        >
+          {sizeDiag ? sizeDiagText(sizeDiag) : '撑高 检测中…'}
         </span>
 
         {/* API 探针（S2 交付物，应用内版）。
@@ -191,6 +201,7 @@ export default function App() {
             } else if (await enterFullscreen()) {
               setIsFs(true);
             }
+            setSizeDiag(diagnoseSize());
           }}
         >
           {isFs ? '退出全屏' : '全屏'}
@@ -249,4 +260,31 @@ function ApiProbePanel({ result, onClose }: { result: ProbeResult; onClose: () =
       </div>
     </div>
   );
+}
+
+/**
+ * 把尺寸诊断压成一行短标签。
+ *
+ * 为什么显示得这么具体：这个功能在不同环境下有 4 种失败形态，
+ * 而它们的修法完全不同——光看「没生效」分不出是哪一种。
+ *   · 不在 iframe   → 本地裸跑，正常，不用管
+ *   · 读不到父页     → 跨域或沙箱，从内部无解，得改投递方式
+ *   · 写入被覆盖     → 酒馆有更强的尺寸逻辑在跟我们抢
+ *   · 已生效         → 正常，后面跟着实测的宽高
+ * 悬停有完整说明（title 里是 note）。
+ */
+function sizeDiagText(d: SizeDiag): string {
+  const size = d.rect ? ` ${d.rect.w}×${d.rect.h}` : '';
+  switch (d.status) {
+    case 'ok':
+      return `撑高 已生效${size}`;
+    case 'no-iframe':
+      return '撑高 不在 iframe（裸跑）';
+    case 'blocked':
+      return '撑高 受阻：读不到父页';
+    case 'write-failed':
+      return `撑高 写入被覆盖${size}`;
+    default:
+      return '撑高 检测中…';
+  }
 }
