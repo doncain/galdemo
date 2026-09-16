@@ -19,6 +19,10 @@ dist/yaoguai/minigal/*.LICENSE.txt
 # 通配一劳永逸。
 dist/dump*.html
 dist/shots/
+# 预览工具的产物（scripts/preview-floor.mjs）。
+# 注意 dist/*.png 只匹配 dist 根下的文件，挡不住 dist/preview/shot.png，
+# 所以这里必须单独排除目录。
+dist/preview/
 dist/*.png
 dist-test/
 
