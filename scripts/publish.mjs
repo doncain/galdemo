@@ -170,6 +170,42 @@ const commitMsg = `build: minigal 产物 ${new Date().toISOString().slice(0, 19)
 const commit = sh('git', ['commit', '-m', commitMsg]);
 console.log('\n  git commit: ' + (commit.ok ? 'ok' : commit.out.split('\n')[0]));
 
+// ── 4.5 把正式版 json 的 CDN 地址钉到「刚提交的这个 commit」 ──
+//
+// ── 为什么必须钉提交号，而不是用 @master ──────────────────────
+// jsDelivr 对**分支**的解析结果有缓存，且实测极不可靠：
+//   · purge 文件路径 → 无效；purge 分支 → 同样无效；
+//   · 实测 @master 长期返回几轮之前的内容（响应头 Age 很新，
+//     说明边缘缓存是刚刷过的，问题出在 jsDelivr 源站的分支解析）；
+//   · 而 @<commit-sha> 是**内容寻址**，实测立刻正确。
+// 这是本项目花了一整轮才定位的坑：玩家那边表现是「界面还是旧版」，
+// 而且无论怎么清浏览器缓存都没用——因为 CDN 给的就是旧的。
+//
+// 钉的是「刚刚那个包含产物的提交」，所以地址与产物永远自洽。
+// 代价：地址会变，需要更新酒馆里的正则（重导入 json，或直接改 URL 那一行）。
+// 开发迭代时请改用本机通道（minigal-界面-实时修改.json），它完全不经过 CDN。
+const sha = sh('git', ['rev-parse', 'HEAD']).out.trim();
+if (sha) {
+  const formalPath = path.join(ROOT, '导入到酒馆中', 'minigal-界面-正式.json');
+  if (fs.existsSync(formalPath)) {
+    const raw = fs.readFileSync(formalPath, 'utf8');
+    // 只替换 @<版本标识> 这一段，其余（路径、域名、转义）原样保留
+    const pinned = raw.replace(
+      /(cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/@]+)@[^/]+(\/)/,
+      `$1@${sha}$2`,
+    );
+    if (pinned !== raw) {
+      fs.writeFileSync(formalPath, pinned, 'utf8');
+      console.log(`  已把正式版地址钉到 @${sha.slice(0, 12)}…`);
+      sh('git', ['add', formalPath]);
+      const pinCommit = sh('git', ['commit', '-m', `chore: 正式版 CDN 地址钉到 ${sha.slice(0, 12)}`]);
+      console.log('  git commit: ' + (pinCommit.ok ? 'ok (钉地址)' : pinCommit.out.split('\n')[0]));
+    } else {
+      console.log(`  正式版地址已是 @${sha.slice(0, 12)}…（无需改动）`);
+    }
+  }
+}
+
 const push = sh('git', ['push', 'origin', `HEAD:${branch}`]);
 console.log('  git push  : ' + (push.ok ? 'ok' : push.out.split('\n').slice(-3).join(' | ')));
 
