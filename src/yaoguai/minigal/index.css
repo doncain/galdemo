@@ -36,11 +36,20 @@ body {
 
 /* 顶部信息条要压在文本框之上，否则会被 .gal-textbox 盖住。
    加半透明底衬：只有描边时，浅灰标签压在亮背景（天空/雪地）上几乎看不见 ——
-   截图核对时才发现它是「渲染了但读不出」。 */
+   截图核对时才发现它是「渲染了但读不出」。
+
+   ★ z-index 是必须的，不能靠 DOM 顺序。
+   这个标签是 .gal-app 的**第一个子元素**，而背景层是 z-index:0 的定位元素 ——
+   两者同属「z-index: 0/auto 的定位后代」这一层，按**树序**绘制，
+   于是背景把它整个盖住。症状极具欺骗性：位置、尺寸、文本全对
+   （布局断言也全绿），就是画不出来。人眼看截图才发现。
+   （旁边的 .gal-place 可见纯属侥幸 —— 它在 PlayScreen 里，树序靠后。
+     所以两个都显式给层级，别让可见性依赖元素摆放顺序。） */
 .gal-floor-tag {
   position: absolute;
   top: 18px;
   left: 24px;
+  z-index: 30;
   padding: 4px 12px;
   font-size: 12px;
   letter-spacing: 1.5px;
@@ -54,6 +63,7 @@ body {
   position: absolute;
   top: 18px;
   right: 24px;
+  z-index: 30;
   padding: 4px 12px;
   font-size: 12px;
   letter-spacing: 1.5px;
@@ -549,6 +559,11 @@ body {
   transform: translateX(-50%);
   z-index: 35;
   display: flex;
+  /* 允许换行 + 限宽：S5 加了「重roll 本楼 / 删本楼」之后按钮变多，
+     窄屏上一行放不下会直接溢出视口（布局验收抓到的）。 */
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 32px);
   gap: 10px;
   align-items: center;
   padding: 5px 14px;
@@ -557,7 +572,7 @@ body {
   color: #cfc9bc;
   background: rgba(10, 12, 18, 0.85);
   border: 1px solid rgba(212, 183, 90, 0.3);
-  border-radius: 999px;
+  border-radius: 18px;
   backdrop-filter: blur(3px);
 }
 .gal-floorbar button {
@@ -674,14 +689,7 @@ body {
 
 /* 小屏：楼层条窄一点，输入栏更紧凑。
    文本框让位靠 --gal-bottom-h，这里不需要再覆盖高度。
-   ★ 窄屏的两个顶部标签（左侧「解析来源」、右侧「场景标签」）会与居中的
-   楼层条撞车 —— 尤其是出现「回到最新」按钮时楼层条变宽。
-   实测：480px 宽时两者横向重叠 40px。所以窄屏把两个标签一起下移一行。 */
-@media (max-width: 720px) {
-  .gal-floor-tag,
-  .gal-place { top: 46px; }
-}
-
+   顶部两个标签的位置由文件末尾的统一规则处理（楼层条可能换行成两行）。 */
 @media (max-width: 640px) {
   .gal-floorbar { gap: 6px; padding: 4px 10px; font-size: 11px; }
   .gal-inputbar { padding: 6px 8px; }
@@ -713,5 +721,106 @@ body {
 .gal-devbar [data-minigal='devbar-size'][data-size-status='blocked'],
 .gal-devbar [data-minigal='devbar-size'][data-size-status='write-failed'] {
   color: #e8888a;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   S5：变量面板 + 删楼确认条
+   ══════════════════════════════════════════════════════════════ */
+
+/* 删楼确认条：底部堆叠里的第一块，与提示条同族。
+   ★ 用站内条而不是 window.confirm —— iframe 里原生对话框可能被沙箱策略拦掉
+   （表现是「点了删楼没反应」且看不出原因），而且它无法被自动化验收驱动，
+   删楼这条路就成了「永远验不到」。 */
+.gal-confirm {
+  align-self: center;
+  margin: 0 12px 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 88%;
+  padding: 8px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #f3c9c9;
+  background: rgba(34, 16, 16, 0.95);
+  border: 1px solid rgba(226, 110, 110, 0.55);
+  border-radius: 4px;
+}
+.gal-confirm button {
+  flex: none;
+  padding: 2px 10px;
+  font: inherit;
+  color: #e8e2d6;
+  background: rgba(70, 44, 44, 0.9);
+  border: 1px solid rgba(200, 140, 140, 0.5);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.gal-confirm .gal-confirm-yes {
+  color: #ffd9d9;
+  border-color: rgba(226, 110, 110, 0.9);
+  background: rgba(120, 40, 40, 0.9);
+}
+
+/* 变量面板：浮在底部堆叠之上。
+   bottom 用 --gal-bottom-h（由 App 实测写入），所以提示条 / 确认条一出现，
+   面板会自动上移，不会互相压住 —— 与文本框让位用的是同一个机制。
+   没有这个变量就得写死一个高度，而写死的高度一定会被某种状态打破。 */
+.gal-varsview {
+  position: absolute;
+  right: 12px;
+  bottom: calc(var(--gal-bottom-h, 0px) + 12px);
+  z-index: 45;
+  max-width: min(560px, 72vw);
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 12, 18, 0.95);
+  border: 1px solid rgba(120, 190, 255, 0.35);
+  border-radius: 6px;
+}
+.gal-varsview-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #cfe4f7;
+  border-bottom: 1px solid rgba(120, 190, 255, 0.25);
+}
+.gal-varsview-where { color: #8fb8d8; }
+.gal-varsview-head button {
+  margin-left: auto;
+  padding: 2px 10px;
+  font: inherit;
+  color: #cfc9bc;
+  background: rgba(60, 54, 42, 0.9);
+  border: 1px solid rgba(139, 133, 120, 0.5);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.gal-varsview-body {
+  margin: 0;
+  padding: 10px;
+  max-height: 42vh;
+  overflow: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #cfc9bc;
+}
+.gal-varsview-empty {
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #b6b0a4;
+}
+
+/* 窄屏：底部楼层条按钮多（S5 加了重roll / 删楼），会换行成两行。
+   两个顶部标签因此要下移到楼层条**下方**，否则会被它压住。
+   为什么是 80px 而不是「一行的高度」：换行后楼层条高约 54px（top 12 + 54 = 66），
+   再留一点余量。这个值是布局验收实测出来的 —— 别凭感觉调小。 */
+@media (max-width: 720px) {
+  .gal-floor-tag,
+  .gal-place { top: 80px; }
 }
 

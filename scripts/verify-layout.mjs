@@ -48,6 +48,22 @@ const MEASURE = `
   host.id = 'layout-out';
   document.body.appendChild(host);
 
+  // ★ 命中测试：几何「位置正确」不等于「看得见」。
+  // 真实 bug：顶部「解析来源」标签没有任何 z-index，而它是 .gal-app 的第一个
+  // 子元素、背景层是 z-index:0 的定位元素 —— 两者同层按**树序**绘制，
+  // 于是背景把它整个盖住。位置/尺寸/文本全对（几何断言全绿），就是画不出来。
+  // elementFromPoint 直接问「这个点上最顶层是谁」，是唯一能自动发现它的办法。
+  function hit(sel) {
+    var e = document.querySelector(sel);
+    if (!e) return 'missing';
+    var r = e.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return 'zero-size';
+    var top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    if (!top) return 'nothing';
+    if (e === top || e.contains(top)) return 'self';
+    return 'covered:' + (top.getAttribute('data-minigal') || top.className || top.tagName);
+  }
+
   function snap(prefix) {
     var app = document.querySelector('.gal-app');
     for (var k in KEYS) {
@@ -60,6 +76,17 @@ const MEASURE = `
     host.setAttribute('data-' + prefix + '-vp', window.innerWidth + 'x' + window.innerHeight);
     host.setAttribute('data-' + prefix + '-var',
       (app && app.style.getPropertyValue('--gal-bottom-h')) || 'none');
+    // 记录「回到最新」是否存在 —— 它是楼层条最宽状态的标志，用作正向对照
+    host.setAttribute('data-' + prefix + '-latestbtn',
+      document.querySelector('[data-minigal="floor-latest"]') ? '1' : '0');
+    host.setAttribute('data-' + prefix + '-regenbtn',
+      document.querySelector('[data-minigal="regen-btn"]') ? '1' : '0');
+    // 命中测试结果
+    host.setAttribute('data-' + prefix + '-hit-ft', hit('.gal-floor-tag'));
+    host.setAttribute('data-' + prefix + '-hit-pl', hit('.gal-place'));
+    host.setAttribute('data-' + prefix + '-hit-fb', hit('.gal-floorbar'));
+    host.setAttribute('data-' + prefix + '-hit-tb', hit('.gal-textbox'));
+    host.setAttribute('data-' + prefix + '-hit-ib', hit('.gal-inputbar'));
   }
 
   // 触发一次真实的状态变化，让底部堆叠变高，验「让位」这条链路。
@@ -81,10 +108,19 @@ const MEASURE = `
     setTimeout(function () { btn.click(); }, 80);
   }
 
+  // 先切到「回看历史」态再量。
+  // ★ 理由：此时楼层条上会多出「回到最新」，是**按钮最多、最宽**的状态 ——
+  // 窄屏上的布局问题最可能在这里出现，只测按钮少的状态等于没测最坏情况。
+  function clickPrev() {
+    var prev = document.querySelector('[data-minigal="floor-prev"]');
+    if (prev && !prev.disabled) prev.click();
+  }
+
   // 有限次 setTimeout —— 虚拟时间下不能用 setInterval（会永不收敛）
-  setTimeout(function () { snap('l'); }, 500);
-  setTimeout(function () { clickSend(); }, 900);
-  setTimeout(function () { snap('m'); host.setAttribute('data-done', '1'); }, 1600);
+  setTimeout(function () { clickPrev(); }, 200);
+  setTimeout(function () { snap('l'); }, 600);
+  setTimeout(function () { clickSend(); }, 1000);
+  setTimeout(function () { snap('m'); host.setAttribute('data-done', '1'); }, 1700);
 })();
 `;
 
@@ -220,6 +256,27 @@ for (const [w, h, label] of SIZES) {
   ck('⑥ 堆叠变高后：仍不重叠', !!M.tb && !!M.ib && !overlaps(M.tb, M.ib),
     M.tb && M.ib ? `文本框底 ${M.tb.b} vs 输入栏顶 ${M.ib.t}` : '(缺)');
   ck('⑥ 提示条与输入栏不重叠', !!Mnotice && !!M.ib && !overlaps(Mnotice, M.ib));
+
+  // ⑦ 最坏情况：回看历史（多了「回到最新」）+ S5 的重roll/删楼，共 6 个按钮。
+  //    前面的 ③ 已经在**这个状态**下验过不重叠，这里把「前置条件成立」显式钉住 ——
+  //    否则哪天按钮变少了，③ 会以「更容易通过的状态」继续绿下去（假通过）。
+  ck('⑦ 前置：确实处在按钮最多的回看态', pick('l-latestbtn') === '1', `回到最新存在=${pick('l-latestbtn')}`);
+  ck('⑦ 前置：S5 的重roll 按钮已渲染在楼层条上', pick('l-regenbtn') === '1');
+  ck('⑦ 楼层条在按钮最多时仍完整在视口内', !!L.fb && inside(L.fb, vw, vh),
+    L.fb ? `楼层条 ${L.fb.l}-${L.fb.r} / 视口 0-${vw}` : '(缺)');
+
+  // ⑧ 命中测试：位置对 ≠ 看得见。这一组专抓「被上层元素盖住」。
+  const hitKeys = [
+    ['ft', '解析来源标签'],
+    ['pl', '场景标签'],
+    ['fb', '楼层条'],
+    ['tb', '文本框'],
+    ['ib', '输入栏'],
+  ];
+  for (const [k, name] of hitKeys) {
+    const v = pick(`l-hit-${k}`);
+    ck(`⑧ ${name} 确实在最上层（未被盖住）`, v === 'self', v);
+  }
 
   console.log('');
 }

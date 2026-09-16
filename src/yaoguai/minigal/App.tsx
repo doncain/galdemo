@@ -6,8 +6,10 @@ import { CHARACTERS, hasSprite } from './core/assets';
 import { resolveEmotion } from './core/scriptProtocol';
 import { runApiProbe, probeVerdict } from './core/apiProbe';
 import type { ProbeResult } from './core/apiProbe';
-import { hasTavern, getMessages, slash, onEvent, TE, IE } from './core/tavern';
+import { hasTavern, getMessages, slash, onEvent, TE, IE, STORY_UPDATED } from './core/tavern';
 import { getAssistantFloors, getLatestAssistantId, floorMessage } from './core/floors';
+import { deleteFloors, regenerateCurrentFloor } from './core/tavernOps';
+import { VariablesView } from './components/VariablesView';
 import {
   enterFullscreen,
   exitFullscreen,
@@ -120,37 +122,50 @@ export default function App() {
   }, [sourceKey, rawMessage, targetFloorId]);
 
   // ── 楼层数据同步 ──
+  //
+  // 抽成 useCallback 而不是写在 effect 里：删楼 / 重roll 之后要**主动**同步一次。
+  // 不能只依赖事件 —— 某些宿主环境里 eventEmit 未必回灌到同一个窗口，
+  // 那时界面就停在旧状态，而且完全没有报错。
+  const syncFloors = useCallback(() => {
+    const latestId = getLatestAssistantId();
+    const list = getAssistantFloors();
+    if (latestId != null) {
+      if (isGenRef.current) {
+        // 生成中：只把「生成楼」往后推，不动正在看的画面
+        setGeneratingFloorId((p) => (p != null && latestId <= p ? p : latestId));
+      } else {
+        setLastAssistantFloorId(latestId);
+      }
+    }
+    setFloors(list);
+    // ★ 删楼之后，被钉住的历史楼可能已经不存在了。
+    // 不归位就会去读一个不存在的楼层 → 拿到空文本 → 整片画面空白，
+    // 而用户看不出原因（只会觉得「删了一楼之后界面就坏了」）。
+    setViewingFloorId((v) => (v != null && !list.includes(v) ? null : v));
+    setFloorTick((t) => t + 1); // 内容可能变了，推动重算
+  }, []);
+
   useEffect(() => {
     if (!hasTavern) return;
-    const sync = () => {
-      const latestId = getLatestAssistantId();
-      if (latestId != null) {
-        if (isGenRef.current) {
-          // 生成中：只把「生成楼」往后推，不动正在看的画面
-          setGeneratingFloorId((p) => (p != null && latestId <= p ? p : latestId));
-        } else {
-          setLastAssistantFloorId(latestId);
-        }
-      }
-      setFloors(getAssistantFloors());
-      setFloorTick((t) => t + 1); // 内容可能变了，推动重算
-    };
-    sync();
+    syncFloors();
     const offs = [
-      onEvent(TE.MESSAGE_RECEIVED, sync),
-      onEvent(TE.MESSAGE_UPDATED, sync),
+      onEvent(TE.MESSAGE_RECEIVED, syncFloors),
+      onEvent(TE.MESSAGE_UPDATED, syncFloors),
       // 生成结束事件后延迟一点再同步：消息落库与事件触发之间有窗口，
       // 立刻读可能拿到还没写完的楼层。
-      onEvent(IE.GENERATION_ENDED, () => window.setTimeout(sync, 300)),
+      onEvent(IE.GENERATION_ENDED, () => window.setTimeout(syncFloors, 300)),
+      // 本项目的自定义事件：删楼 / 重roll 之后由操作层发出（坑 24）。
+      // 用它而不是 location.reload() —— reload 会退出全屏、丢全部前端状态。
+      onEvent(STORY_UPDATED, syncFloors),
       onEvent(TE.CHAT_CHANGED, () => {
         // 换聊天：进度作废、回到跟随最新
         progressRef.current.clear();
         setViewingFloorId(null);
-        sync();
+        syncFloors();
       }),
     ];
     return () => offs.forEach((off) => off());
-  }, []);
+  }, [syncFloors]);
 
   // ── 生成锁 ──
   // 成对调用：startGenerating 钉住当前画面，finishGenerating 解锁并跳回最新。
@@ -219,6 +234,43 @@ export default function App() {
       finishGenerating();
     }
   }, [inputText, isGenerating, startGenerating, finishGenerating]);
+
+  // ── S5：变量面板 / 重roll 本楼 / 删本楼 ──
+  const [varsOpen, setVarsOpen] = useState(false);
+
+  // 删楼用**站内确认条**，不用 window.confirm。两条理由：
+  //   · iframe 里原生对话框可能被沙箱策略拦掉 —— 表现是「点了删楼没反应」，
+  //     而且看不出原因；
+  //   · 原生对话框无法被自动化验收驱动，删楼这条路就成了「永远验不到」。
+  // 站内确认条还能顺手把「删哪一楼」写清楚。
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+
+  const handleRegen = useCallback(async () => {
+    if (isGenerating) return;
+    setNotice(null);
+    startGenerating();
+    try {
+      const r = await regenerateCurrentFloor();
+      setNotice(r.ok ? `重roll 完成：${r.detail ?? ''}` : `重roll 未完成：${r.error ?? ''}`);
+    } finally {
+      // ★ 与发送同理：无论成败都要解锁，否则一次异常就让界面永久卡在「生成中」
+      finishGenerating();
+    }
+  }, [isGenerating, startGenerating, finishGenerating]);
+
+  const handleConfirmDelete = useCallback(async () => {
+    const t = pendingDelete;
+    setPendingDelete(null);
+    if (t == null) return;
+    setNotice(null);
+    const r = await deleteFloors(t, t);
+    if (!r.ok) {
+      setNotice(`删楼未完成：${r.error ?? ''}`);
+      return;
+    }
+    // 事件未必回灌到本窗口（见 syncFloors 的注释），这里主动同步一次
+    syncFloors();
+  }, [pendingDelete, syncFloors]);
 
   // ── 行内导航（PlayScreen 内部走，到头/到首时交回这里翻楼）──
   const onAtStart = useCallback(() => goPrevFloor(), [goPrevFloor]);
@@ -377,6 +429,31 @@ export default function App() {
             回到最新
           </button>
         )}
+
+        {/* S5：重roll / 删楼。
+            放在楼层条上而不是开发条里 —— 它们是**玩家功能**，而开发条将来要隐藏。
+            裸跑时禁用（没酒馆环境就没有 generate / setChatMessages）。 */}
+        <button
+          type="button"
+          disabled={isGenerating || !hasTavern}
+          onClick={handleRegen}
+          data-minigal="regen-btn"
+          title="让 AI 重写本楼：楼号不变、正文原位替换、变量跟着重算"
+        >
+          重roll 本楼
+        </button>
+        <button
+          type="button"
+          disabled={isGenerating || !hasTavern || targetFloorId == null}
+          onClick={() => {
+            if (targetFloorId != null) setPendingDelete(targetFloorId);
+          }}
+          data-minigal="delete-btn"
+          title="删除本楼（不可复原）"
+        >
+          删本楼
+        </button>
+
         {isGenerating && <span className="gal-gening" data-minigal="generating">生成中…</span>}
       </div>
 
@@ -386,6 +463,21 @@ export default function App() {
           堆叠后高度由内容决定，再通过 --gal-bottom-h 把总高告诉文本框让它让位，
           于是任何视口高度都不用写死数字（原来写死 56px，提示条一出现就不对了）。 */}
       <div className="gal-bottom" ref={bottomRef}>
+        {/* 删楼确认条（S5）。用站内条而不是 window.confirm —— 理由见 pendingDelete 的注释 */}
+        {pendingDelete != null && (
+          <div className="gal-confirm" data-minigal="confirm" onClick={(e) => e.stopPropagation()}>
+            <span data-minigal="confirm-text">
+              删除第 {pendingDelete} 楼？这一层的内容会消失，不可复原。
+            </span>
+            <button type="button" className="gal-confirm-yes" onClick={handleConfirmDelete} data-minigal="confirm-yes">
+              删除
+            </button>
+            <button type="button" onClick={() => setPendingDelete(null)} data-minigal="confirm-no">
+              取消
+            </button>
+          </div>
+        )}
+
         {notice && (
           <div className="gal-notice" data-minigal="notice" onClick={(e) => e.stopPropagation()}>
             {notice}
@@ -466,6 +558,19 @@ export default function App() {
           探 API
         </button>
 
+        {/* 变量面板开关（S5）。它是**调试工具**，所以放开发条；
+            而重roll / 删楼是玩家功能，放在楼层条上。
+            面板本身只在打开时才进 DOM，避免污染别的断言。 */}
+        <button
+          type="button"
+          className="gal-devbtn"
+          data-minigal="vars-btn"
+          data-open={varsOpen ? '1' : '0'}
+          onClick={() => setVarsOpen((o) => !o)}
+        >
+          变量
+        </button>
+
         <button
           type="button"
           className="gal-devbtn gal-fsbtn"
@@ -487,6 +592,10 @@ export default function App() {
       </div>
 
       {probe && <ApiProbePanel result={probe} onClose={() => setProbe(null)} />}
+
+      {/* 变量面板（S5）。放在底部堆叠**之外** ——
+          它是绝对定位的浮层，塞进堆叠会变成 flex 子项、把底部整块撑高。 */}
+      <VariablesView floorId={targetFloorId} open={varsOpen} onClose={() => setVarsOpen(false)} />
     </div>
   );
 }

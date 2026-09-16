@@ -15,6 +15,7 @@
     "verify:s1": "node scripts/verify-s1-ui.mjs",
     "verify:s3": "node scripts/verify-s3-all.mjs",
     "verify:s4": "node scripts/verify-s4-ui.mjs",
+    "verify:s5": "node scripts/verify-s5-ui.mjs",
     "verify:layout": "node scripts/verify-layout.mjs",
     "verify:all": "node scripts/verify-all.mjs",
     "serve": "node scripts/serve.mjs",
