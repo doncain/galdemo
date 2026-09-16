@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PlayScreen } from './components/PlayScreen';
 import { parseFloor } from './core/scriptParser';
 import { MOCK_FLOOR_STAGE, MOCK_FLOOR_WITH_CONTENT } from './core/fixtures';
@@ -6,6 +6,8 @@ import { CHARACTERS, hasSprite } from './core/assets';
 import { resolveEmotion } from './core/scriptProtocol';
 import { runApiProbe, probeVerdict } from './core/apiProbe';
 import type { ProbeResult } from './core/apiProbe';
+import { hasTavern, getMessages, slash, onEvent, TE, IE } from './core/tavern';
+import { getAssistantFloors, getLatestAssistantId, floorMessage } from './core/floors';
 import {
   enterFullscreen,
   exitFullscreen,
@@ -25,53 +27,231 @@ const FIXTURES: Record<string, { text: string; label: string }> = {
   stage: { text: MOCK_FLOOR_STAGE, label: 'S3 夹具（立绘舞台）' },
 };
 
-/**
- * 浏览器裸跑用的楼层文本。
- *
- * 接入酒馆后，这里换成 getChatMessages(楼层号)[0].message（S4）。
- * 在那之前，换楼层文本有三条路：
- *   1. URL 参数 ?floor=<encodeURIComponent(楼层文本)>  —— 供无头浏览器自动化验收
- *   2. URL 参数 ?fixture=s1|stage                        —— 切换内置夹具
- *   3. 右下角开发条的「严格 / 降级」切换
- *
- * 附：?instant=1 关闭打字动画。
- * 无头浏览器用虚拟时间跑，requestAnimationFrame 与 performance.now() 不同步，
- * 打字会永远走不完——自动化验收需要能拿到「完整画面」，所以必须有这个开关。
- * ?line=N 直接落在第 N 行（1 基），供逐态截图核对。
- */
 function readSearch(key: string): string | null {
   if (typeof window === 'undefined') return null;
   return new URLSearchParams(window.location.search).get(key);
 }
 
+/**
+ * 便宜的内容指纹，只用来判断「这一楼的内容是不是变了」。
+ *
+ * 为什么需要它：PlayScreen 用 React 的 key 控制重挂载——
+ *   换楼 → 要重挂载（回到那一楼上次读到的位置）
+ *   内容变了（重生成）→ 要重挂载（从头读）
+ *   只是翻页 → 绝对不能重挂载（否则每翻一页都重置）
+ * 所以 key 里必须包含「内容指纹」，而不是「当前读到的行号」。
+ *
+ * 用长度 + djb2 就够了：碰撞概率极低，而代价是 O(n) 一次。
+ */
+function contentFingerprint(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return `${s.length}:${(h >>> 0).toString(36)}`;
+}
+
 export default function App() {
+  const floorParam = readSearch('floor');
   const fixtureKey = readSearch('fixture') ?? 's1';
   const fixture = FIXTURES[fixtureKey] ?? FIXTURES.s1;
+  const lineParam = readSearch('line');
+  const instant = readSearch('instant') === '1';
 
-  const [floorText, setFloorText] = useState<string>(() => readSearch('floor') ?? fixture.text);
+  // 夹具文本可以被开发条的「切换严格/降级」改写
+  const [fixtureText, setFixtureText] = useState<string>(fixture.text);
 
-  const parsed = useMemo(() => parseFloor(floorText), [floorText]);
-  const [index, setIndex] = useState(0);
+  // ── 楼层状态（S4 三态机）──
+  //   viewingFloorId = null  → 跟随最新楼（默认）
+  //   viewingFloorId = 数字  → 钉在历史某楼（回看）
+  const [viewingFloorId, setViewingFloorId] = useState<number | null>(null);
+  const [lastAssistantFloorId, setLastAssistantFloorId] = useState<number | null>(null);
+  const [generatingFloorId, setGeneratingFloorId] = useState<number | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [floors, setFloors] = useState<number[]>([]);
 
-  // API 探针结果。null = 还没跑过（默认），所以默认 DOM 里不出现面板——
-  // 这很重要：验收脚本按 data-* 断言，默认态多出一堆文本会污染断言。
-  // ?probe=1 可自动跑一次（便于无头验证，也可存成书签）。
+  // 事件回调里要读最新的 isGenerating，但订阅只注册一次（空依赖）——
+  // 用 ref 打通，避免「每次生成都重新订阅一遍事件」。
+  const isGenRef = useRef(false);
+  isGenRef.current = isGenerating;
+
+  // 楼层内容变化时用来驱动 rawMessage 重算。
+  // 为什么用一个计数器而不是把内容存进 state：内容可能很长，
+  // 而每次要读的都是「此刻的真实内容」，没必要在 state 里留一份副本。
+  const [floorTick, setFloorTick] = useState(0);
+
+  /** 当前应当显示的楼号：钉住的历史楼优先，否则跟随最新 AI 楼 */
+  const targetFloorId = viewingFloorId ?? lastAssistantFloorId;
+
+  /**
+   * 楼层文本来源（优先级从高到低）：
+   *   ① ?floor=   —— 显式覆盖，供无头验收 / 本地预览工具用
+   *   ② 酒馆楼层  —— 真机下的正常路径
+   *   ③ 内置夹具  —— 浏览器裸跑时的兜底，保证界面不空
+   */
+  const sourceKind: 'url' | 'tavern' | 'fixture' = floorParam != null ? 'url' : hasTavern ? 'tavern' : 'fixture';
+
+  const rawMessage = useMemo(() => {
+    if (sourceKind === 'url') return floorParam ?? '';
+    if (sourceKind === 'tavern') return floorMessage(targetFloorId) ?? '';
+    return fixtureText;
+    // floorTick 是刻意的依赖：楼层被重生成时内容变了，但 targetFloorId
+    // 可能没变，必须靠这个计数器把重算推起来。
+  }, [sourceKind, floorParam, targetFloorId, fixtureText, floorTick]);
+
+  const parsed = useMemo(() => parseFloor(rawMessage), [rawMessage]);
+
+  // ── 按楼阅读进度 ──
+  // 楼号 → 读到第几行（0 基）。换楼时恢复；只有「同一楼内容真的变了」才清零。
+  const progressRef = useRef<Map<number, number>>(new Map());
+  const lastParseRef = useRef<{ key: string; content: string }>({ key: '', content: '' });
+
+  /** 当前楼的标识：URL/夹具模式下用固定串，避免跨楼串味 */
+  const sourceKey = sourceKind === 'tavern' ? `tavern:${targetFloorId ?? 'none'}` : `${sourceKind}:${fixtureKey}`;
+  const contentKey = useMemo(() => `${sourceKey}#${contentFingerprint(rawMessage)}`, [sourceKey, rawMessage]);
+
+  useEffect(() => {
+    const prev = lastParseRef.current;
+    const sameFloor = prev.key === sourceKey;
+    const contentChanged = prev.content !== rawMessage;
+    // 同一楼的内容变了（重生成）→ 这一楼的进度作废，从头读（踩坑 17）
+    if (sameFloor && contentChanged && targetFloorId != null) {
+      progressRef.current.delete(targetFloorId);
+    }
+    lastParseRef.current = { key: sourceKey, content: rawMessage };
+  }, [sourceKey, rawMessage, targetFloorId]);
+
+  // ── 楼层数据同步 ──
+  useEffect(() => {
+    if (!hasTavern) return;
+    const sync = () => {
+      const latestId = getLatestAssistantId();
+      if (latestId != null) {
+        if (isGenRef.current) {
+          // 生成中：只把「生成楼」往后推，不动正在看的画面
+          setGeneratingFloorId((p) => (p != null && latestId <= p ? p : latestId));
+        } else {
+          setLastAssistantFloorId(latestId);
+        }
+      }
+      setFloors(getAssistantFloors());
+      setFloorTick((t) => t + 1); // 内容可能变了，推动重算
+    };
+    sync();
+    const offs = [
+      onEvent(TE.MESSAGE_RECEIVED, sync),
+      onEvent(TE.MESSAGE_UPDATED, sync),
+      // 生成结束事件后延迟一点再同步：消息落库与事件触发之间有窗口，
+      // 立刻读可能拿到还没写完的楼层。
+      onEvent(IE.GENERATION_ENDED, () => window.setTimeout(sync, 300)),
+      onEvent(TE.CHAT_CHANGED, () => {
+        // 换聊天：进度作废、回到跟随最新
+        progressRef.current.clear();
+        setViewingFloorId(null);
+        sync();
+      }),
+    ];
+    return () => offs.forEach((off) => off());
+  }, []);
+
+  // ── 生成锁 ──
+  // 成对调用：startGenerating 钉住当前画面，finishGenerating 解锁并跳回最新。
+  // 只用其中一个 = 界面要么卡死在旧楼、要么生成中乱跳。
+  const startGenerating = useCallback(() => {
+    setViewingFloorId((v) => v ?? lastAssistantFloorId);
+    setIsGenerating(true);
+  }, [lastAssistantFloorId]);
+
+  const finishGenerating = useCallback(() => {
+    setIsGenerating(false);
+    const latest = getLatestAssistantId();
+    if (latest != null) {
+      setGeneratingFloorId(latest);
+      setLastAssistantFloorId(latest);
+    }
+    setViewingFloorId(null); // ★ 归位 null = 自动跟随最新楼
+    setFloorTick((t) => t + 1);
+  }, []);
+
+  // ── 楼层导航 ──
+  // 生成中只允许翻到「生成楼之前」：新楼正在生成，翻过去会看到半截内容。
+  const availableFloors = useMemo(
+    () => (isGenerating && generatingFloorId != null ? floors.filter((f) => f < generatingFloorId) : floors),
+    [floors, isGenerating, generatingFloorId],
+  );
+  const navIndex = targetFloorId != null ? availableFloors.indexOf(targetFloorId) : -1;
+  const canPrevFloor = navIndex > 0;
+  const canNextFloor = navIndex >= 0 && navIndex < availableFloors.length - 1;
+
+  const goNextFloor = useCallback(() => {
+    if (!(navIndex >= 0 && navIndex < availableFloors.length - 1)) return;
+    // 走到最后一楼就归位，重新「跟随最新」（这样后续新楼会自动跟上来）
+    if (navIndex + 1 === availableFloors.length - 1) setViewingFloorId(null);
+    else setViewingFloorId(availableFloors[navIndex + 1]);
+  }, [navIndex, availableFloors]);
+
+  const goPrevFloor = useCallback(() => {
+    if (navIndex > 0) setViewingFloorId(availableFloors[navIndex - 1]);
+  }, [navIndex, availableFloors]);
+
+  // ── 发送 ──
+  const [inputText, setInputText] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const handleSend = useCallback(async () => {
+    const trimmed = inputText.trim();
+    if (!trimmed || isGenerating) return;
+    setInputText('');
+    if (!hasTavern) {
+      setNotice('本地预览模式：没有酒馆环境，发送不可用。真机里才能真的发送。');
+      return;
+    }
+    setNotice(null);
+    startGenerating();
+    try {
+      if (!(await slash('/send ' + trimmed))) {
+        setNotice('发送失败：酒馆没有响应 /send。');
+        return;
+      }
+      // ★ 必须 await 到生成结束。不等的话 finishGenerating 会在生成刚开始时
+      // 就执行，锁等于没有——画面会在 AI 还在写的时候就开始乱跳。
+      await slash('/trigger await=true');
+    } finally {
+      // 无论成功失败都解锁，否则一次异常会让界面永久卡在「生成中」。
+      finishGenerating();
+    }
+  }, [inputText, isGenerating, startGenerating, finishGenerating]);
+
+  // ── 行内导航（PlayScreen 内部走，到头/到首时交回这里翻楼）──
+  const onAtStart = useCallback(() => goPrevFloor(), [goPrevFloor]);
+  const onReachEnd = useCallback(() => goNextFloor(), [goNextFloor]);
+
+  // ── 阅读进度读写 ──
+  const savedIndex = useMemo(() => {
+    if (lineParam != null) return Math.max(0, (Number(lineParam) || 1) - 1);
+    if (targetFloorId == null) return 0;
+    return progressRef.current.get(targetFloorId) ?? 0;
+    // contentKey 参与依赖：换楼/换内容时重新取一次
+  }, [lineParam, targetFloorId, contentKey]);
+
+  const handleProgress = useCallback(
+    (i: number) => {
+      if (targetFloorId != null) progressRef.current.set(targetFloorId, i);
+      setIndexMirror(i);
+    },
+    [targetFloorId],
+  );
+  // 开发条要显示当前行号，所以行号也需要一个 state 副本
+  const [indexMirror, setIndexMirror] = useState(0);
+
+  // ── 探针 / 尺寸守卫（S2、S6）──
   const [probe, setProbe] = useState<ProbeResult | null>(() =>
     readSearch('probe') === '1' ? runApiProbe() : null,
   );
-
-  // ── iframe 尺寸守卫（S6）──
-  // 在酒馆里：把 iframe 撑到 ~800px 或视口高度、并放到整宽，
-  // 否则画面被压成一条窄缝。裸跑预览时自动 no-op。
   const guardRef = useRef<GuardHandle | null>(null);
   const [isFs, setIsFs] = useState(false);
-  // 诊断快照：让「撑高到底成没成、卡在哪一步」在界面上直接可见，
-  // 不用开 DevTools。这是刻意做的——「静默失效」是本项目最忌讳的形态。
   const [sizeDiag, setSizeDiag] = useState<SizeDiag | null>(null);
 
   useEffect(() => {
-    guardRef.current = startSizeGuard(false); // 手机端可传 true 用更矮的目标
-    // 有限次采样（不用 setInterval：重复定时器会让无头验收的虚拟时间永不收敛）
+    guardRef.current = startSizeGuard(false);
     const sample = () => setSizeDiag(diagnoseSize());
     sample();
     const timers = [300, 1200, 2500].map((t) => window.setTimeout(sample, t));
@@ -82,8 +262,6 @@ export default function App() {
     };
   }, []);
 
-  // 用户按 Esc 退出原生全屏时，也要把伪全屏一起退掉，
-  // 否则会留下「楼层已恢复、样式还挂着」的半吊子状态。
   useEffect(() => {
     const onFsChange = async () => {
       if (!document.fullscreenElement && isFs) {
@@ -95,21 +273,14 @@ export default function App() {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, [isFs]);
 
-  const hasContent = parsed.lines.length > 0;
+  // ── 开发条统计 ──
   const strictMode = parsed.usedContentTag;
   const drifted = parsed.lines.filter((l) => l.suspectNarrator).length;
-  const instant = readSearch('instant') === '1';
-  const startLine = Math.max(0, (Number(readSearch('line')) || 1) - 1);
-
-  // 立绘相关统计：让「有几行会上台」「有几行缺图」在开发条上一眼可见。
-  // 缺图的行不是错误（未登记角色本就没有立绘），但作者需要知道。
   const stageRows = parsed.lines.filter((l) => l.speaker && l.type !== 'narrator' && l.speaker !== '<user>').length;
   const spritedRows = parsed.lines.filter((l) => l.sprite).length;
-  // 差分回退次数：有情绪方括号、但该角色没有这张差分 → 实际用了 calm。
   const fallbackRows = parsed.lines.filter((l) => {
     if (!l.speaker || !l.sprite) return false;
-    const key = resolveEmotion(l.emotion);
-    return !hasSprite(l.speaker, key);
+    return !hasSprite(l.speaker, resolveEmotion(l.emotion));
   }).length;
   const unknownSpeakers = [
     ...new Set(
@@ -119,34 +290,148 @@ export default function App() {
     ),
   ];
 
+  const sourceLabel =
+    sourceKind === 'tavern'
+      ? `酒馆 第${targetFloorId ?? '?'}楼`
+      : sourceKind === 'url'
+        ? 'URL 指定文本'
+        : `夹具 ${fixtureKey}`;
+
+  const floorOrdinal = targetFloorId != null && floors.indexOf(targetFloorId) >= 0 ? floors.indexOf(targetFloorId) + 1 : null;
+
+  // ── 底部堆叠高度 → CSS 变量 ──
+  // 底部三块（提示条 / 输入栏 / 开发条）装在一个 flex 列里，高度由内容决定。
+  // 文本框必须知道这个总高才能让位：写死一个数字是猜的 ——
+  // 提示条一出现、输入框换行长高，就会盖住「点击继续」和进度。
+  const appRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  const applyBottomHeight = useCallback(() => {
+    const host = appRef.current;
+    const stack = bottomRef.current;
+    if (!host || !stack) return;
+    host.style.setProperty('--gal-bottom-h', `${Math.round(stack.getBoundingClientRect().height)}px`);
+  }, []);
+
+  useEffect(() => {
+    applyBottomHeight();
+    const stack = bottomRef.current;
+    // ResizeObserver 覆盖「不来自 React 状态」的高度变化：字体加载完成、
+    // 文字换行等。窗口尺寸变化则单独监听。
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(applyBottomHeight) : null;
+    if (stack) ro?.observe(stack);
+    window.addEventListener('resize', applyBottomHeight);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', applyBottomHeight);
+    };
+  }, [applyBottomHeight]);
+
+  // ★ 不能只靠 ResizeObserver。
+  // 实测探针：在 headless + --virtual-time-budget 下，ResizeObserver 与
+  // requestAnimationFrame **都 0 次触发**（真浏览器正常）。这意味着
+  // 「文本框让位」这条功能无法被自动化验收覆盖到，同时也说明：
+  // 把一项必要能力完全押在异步观察者上是不必要的风险。
+  // 而底部堆叠的高度变化几乎都来自这两个状态（提示条出现/消失、生成中），
+  // 所以用一条确定性路径兜住它们 —— 不依赖任何观察者。
+  useEffect(() => {
+    applyBottomHeight();
+  }, [applyBottomHeight, notice, isGenerating]);
+
   return (
-    <div className="gal-app">
-      <div className="gal-floor-tag" data-minigal="source">
+    // 底部堆叠的高度通过 --gal-bottom-h 传给 CSS，文本框据此让位。
+    <div className="gal-app" ref={appRef}>
+      <div className="gal-floor-tag" data-minigal="source" data-source-kind={sourceKind}>
+        {sourceKind === 'fixture' ? '本地预览模式 · ' : ''}
         {strictMode ? '严格 content 路径' : '降级路径（未找到 content）'}
       </div>
 
       <PlayScreen
-        key={floorText + ':' + startLine}
+        key={contentKey}
         lines={parsed.lines}
         options={parsed.options}
         speedMs={instant ? 0 : undefined}
-        startIndex={startLine}
-        onProgress={(i) => setIndex(i)}
+        startIndex={savedIndex}
+        onProgress={handleProgress}
+        onAtStart={onAtStart}
+        onReachEnd={onReachEnd}
       />
 
-      <div className="gal-devbar">
+      {/* 楼层导航条：生成中按钮按 availableFloors 自动禁用。
+          ★ 裸跑时**也渲染**（按钮全禁用、显示「无 AI 楼层」）——
+          理由有两条：① 布局在本地就能看到、能截图核对，不用非进酒馆；
+          ② 用户一眼能分辨「我在预览模式」而不是「界面坏了」。 */}
+      <div className="gal-floorbar" data-minigal="floorbar" onClick={(e) => e.stopPropagation()}>
+        <button type="button" disabled={!canPrevFloor} onClick={goPrevFloor} data-minigal="floor-prev">
+          ‹ 上一楼
+        </button>
+        <span data-minigal="floor-pos">
+          {floorOrdinal != null ? `第 ${floorOrdinal} / ${availableFloors.length} 楼` : '无 AI 楼层'}
+          {viewingFloorId !== null ? ' · 历史' : ''}
+        </span>
+        <button type="button" disabled={!canNextFloor} onClick={goNextFloor} data-minigal="floor-next">
+          下一楼 ›
+        </button>
+        {viewingFloorId !== null && (
+          <button type="button" onClick={() => setViewingFloorId(null)} data-minigal="floor-latest">
+            回到最新
+          </button>
+        )}
+        {isGenerating && <span className="gal-gening" data-minigal="generating">生成中…</span>}
+      </div>
+
+      {/* 底部堆叠：提示条 / 输入栏 / 开发条。
+          ★ 为什么必须堆在同一列：三者原本各自 absolute bottom:0，
+          开发条（z-40）会把输入栏（z-35）压掉一半 —— 实测截图里输入框只剩一条缝。
+          堆叠后高度由内容决定，再通过 --gal-bottom-h 把总高告诉文本框让它让位，
+          于是任何视口高度都不用写死数字（原来写死 56px，提示条一出现就不对了）。 */}
+      <div className="gal-bottom" ref={bottomRef}>
+        {notice && (
+          <div className="gal-notice" data-minigal="notice" onClick={(e) => e.stopPropagation()}>
+            {notice}
+            <button type="button" onClick={() => setNotice(null)}>
+              知道了
+            </button>
+          </div>
+        )}
+
+        {/* 输入栏：真实发送入口（点击不冒泡到翻页）。
+            裸跑时保留，点发送会给出明确的「无酒馆环境」提示，而不是静默无事发生。 */}
+        <div className="gal-inputbar" data-minigal="inputbar" onClick={(e) => e.stopPropagation()}>
+        <textarea
+          rows={1}
+          value={inputText}
+          disabled={isGenerating}
+          data-minigal="input"
+          placeholder={isGenerating ? '生成中…' : hasTavern ? '输入消息，Enter 发送' : '本地预览模式，发送不可用'}
+          onChange={(e) => setInputText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+        />
+        <button
+          type="button"
+          disabled={!inputText.trim() || isGenerating}
+          onClick={handleSend}
+          data-minigal="send"
+        >
+          发送
+        </button>
+      </div>
+
+        <div className="gal-devbar">
         <span data-minigal="devbar-state">
-          已解析 {parsed.lines.length} 行
+          {sourceLabel} · 已解析 {parsed.lines.length} 行
           {parsed.options.length > 0 ? ` · ${parsed.options.length} 个选项` : ''}
-          {hasContent ? ` · 第 ${index + 1} 行` : ''}
+          {parsed.lines.length > 0 ? ` · 第 ${indexMirror + 1} 行` : ''}
           {drifted > 0 ? ` · 旁白越界 ${drifted} 行` : ''}
         </span>
 
-        {/* 舞台统计（S3）：把「谁会上台 / 谁缺图 / 谁用了兜底差分」摆出来。
-            这些信息只看截图是看不出的——缺图的行和差分回退的行，
-            画面都"正常"，只有对照 assets.ts 才知道对不对。 */}
         <span data-minigal="devbar-stage">
-          夹具 {fixtureKey} · 上台行 {stageRows}/{spritedRows} 有立绘
+          上台行 {stageRows}/{spritedRows} 有立绘
           {fallbackRows > 0 ? ` · 差分回退 ${fallbackRows} 行` : ''}
           {unknownSpeakers.length > 0 ? ` · 未登记 ${unknownSpeakers.join('/')}` : ''}
           {` · 角色表 ${CHARACTERS.length}`}
@@ -157,16 +442,13 @@ export default function App() {
           className="gal-devbtn"
           data-minigal="toggle-source"
           onClick={() => {
-            setFloorText(() => (strictMode ? MOCK_FLOOR_DEGRADED : MOCK_FLOOR_WITH_CONTENT));
-            setIndex(0);
+            setFixtureText(() => (strictMode ? MOCK_FLOOR_DEGRADED : MOCK_FLOOR_WITH_CONTENT));
+            setIndexMirror(0);
           }}
         >
           切换严格 / 降级
         </button>
 
-        {/* 尺寸诊断（S6）：让「画面被压扁」这类问题一眼可定位。
-            刻意显示得这么细，是因为它在不同环境下有 4 种失败形态，
-            光看「没生效」分不出是哪一种。 */}
         <span
           data-minigal="devbar-size"
           data-size-status={sizeDiag?.status ?? 'pending'}
@@ -175,9 +457,6 @@ export default function App() {
           {sizeDiag ? sizeDiagText(sizeDiag) : '撑高 检测中…'}
         </span>
 
-        {/* API 探针（S2 交付物，应用内版）。
-            做成按钮而不是让人贴 DevTools：它天然跑在正确的 iframe 语境里，
-            不存在「选错上下文导致全红误报」的问题。 */}
         <button
           type="button"
           className="gal-devbtn"
@@ -187,8 +466,6 @@ export default function App() {
           探 API
         </button>
 
-        {/* 伪全屏（S6）：藏掉其它楼层 + 本楼铺满视口。
-            原生全屏被浏览器策略拒绝也无妨——CSS 已经铺满了，那是兜底路径。 */}
         <button
           type="button"
           className="gal-devbtn gal-fsbtn"
@@ -205,7 +482,8 @@ export default function App() {
           }}
         >
           {isFs ? '退出全屏' : '全屏'}
-        </button>
+          </button>
+        </div>
       </div>
 
       {probe && <ApiProbePanel result={probe} onClose={() => setProbe(null)} />}

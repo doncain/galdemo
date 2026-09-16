@@ -30,8 +30,10 @@ interface PlayScreenProps {
   onProgress?: (index: number, total: number) => void;
   /** 选了一个选项。S1 只上抛，S4 接「起草」进输入框 */
   onChoose?: (option: string) => void;
-  /** 走到本楼末尾，再点一次。S4 接发送链路 */
+  /** 走到本楼末尾，再点一次。S4 接「翻到下一楼」 */
   onReachEnd?: () => void;
+  /** 停在本楼第一行，再往前退。S4 接「翻到上一楼」 */
+  onAtStart?: () => void;
   /** 起始行号（0 基）。仅供自动化截图核对各态用。 */
   startIndex?: number;
 }
@@ -43,6 +45,7 @@ export function PlayScreen({
   onProgress,
   onChoose,
   onReachEnd,
+  onAtStart,
   startIndex = 0,
 }: PlayScreenProps) {
   const [index, setIndex] = useState(() =>
@@ -158,7 +161,11 @@ export function PlayScreen({
 
   const prev = useCallback(() => {
     if (index > 0) setIndex((i) => i - 1);
-  }, [index]);
+    // 已在本楼第一行 → 交回上一层（S4 的「翻到上一楼」）。
+    // 不在这里直接改楼号：PlayScreen 只管「楼内怎么走」，
+    // 「走到楼层边界之后去哪」是 App 的事。
+    else onAtStart?.();
+  }, [index, onAtStart]);
 
   // 键盘：Enter / Space / → 前进，← 回退（输入框聚焦时不抢）
   useEffect(() => {

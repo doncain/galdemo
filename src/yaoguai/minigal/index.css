@@ -34,8 +34,9 @@ body {
   align-items: flex-end;
 }
 
-/* 顶部信息条要压在文本框之上，否则会被 .gal-textbox 盖住 */
-.gal-floor-tag,
+/* 顶部信息条要压在文本框之上，否则会被 .gal-textbox 盖住。
+   加半透明底衬：只有描边时，浅灰标签压在亮背景（天空/雪地）上几乎看不见 ——
+   截图核对时才发现它是「渲染了但读不出」。 */
 .gal-floor-tag {
   position: absolute;
   top: 18px;
@@ -43,8 +44,9 @@ body {
   padding: 4px 12px;
   font-size: 12px;
   letter-spacing: 1.5px;
-  color: #8b8578;
-  border: 1px solid rgba(139, 133, 120, 0.3);
+  color: #b6b0a4;
+  background: rgba(10, 12, 18, 0.7);
+  border: 1px solid rgba(139, 133, 120, 0.35);
   border-radius: 4px;
 }
 
@@ -56,7 +58,8 @@ body {
   font-size: 12px;
   letter-spacing: 1.5px;
   color: #a8c8e8;
-  border: 1px solid rgba(168, 200, 232, 0.28);
+  background: rgba(10, 12, 18, 0.7);
+  border: 1px solid rgba(168, 200, 232, 0.3);
   border-radius: 4px;
 }
 
@@ -532,6 +535,158 @@ body {
   color: #8b8578;
   border-top: 1px solid rgba(212, 183, 90, 0.2);
 }
+
+/* ══════════════════════════════════════════════════════════════
+   S4：楼层导航条 + 输入栏 + 提示条
+   ══════════════════════════════════════════════════════════════ */
+
+/* 楼层条：顶部居中。左右两侧已有「解析来源」与「场景标签」，
+   居中放置才不打架。做成胶囊形，与游戏画面的圆角风格一致。 */
+.gal-floorbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 14px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #cfc9bc;
+  background: rgba(10, 12, 18, 0.85);
+  border: 1px solid rgba(212, 183, 90, 0.3);
+  border-radius: 999px;
+  backdrop-filter: blur(3px);
+}
+.gal-floorbar button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #f5d879;
+  cursor: pointer;
+}
+.gal-floorbar button:disabled { color: #5a564e; cursor: default; }
+.gal-floorbar button:not(:disabled):hover { text-decoration: underline; }
+
+.gal-gening { color: #9fd8ff; }
+/* 生成中的呼吸感：一眼看出「在等」而不是「卡住了」 */
+@keyframes gal-gening-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.gal-gening { animation: gal-gening-pulse 1.2s ease-in-out infinite; }
+
+/* ── 底部堆叠容器 ──
+   ★ 一个只有看截图才会发现的坑：输入栏与开发条原本各自 absolute bottom:0，
+   于是开发条（z-40）把输入栏（z-35）压掉一半 —— 输入框只剩一条缝。
+   断言全绿：属性全对，只是位置重叠。
+   修法：三块放进同一个 flex 列，高度由内容决定，永不互相压。
+   总高再由 App 写进 --gal-bottom-h，让文本框自动让位。
+   （原来写死 56px —— 提示条一出现就不够了。这类数字不该猜。） */
+.gal-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 开发条是堆叠里的第三块，原来的贴底定位由容器接管 */
+.gal-bottom .gal-devbar {
+  position: static;
+  bottom: auto;
+}
+
+/* 输入栏：堆叠里的第二块 */
+.gal-inputbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(10, 12, 18, 0.9);
+  border-top: 1px solid rgba(212, 183, 90, 0.22);
+}
+.gal-inputbar textarea {
+  flex: 1;
+  resize: none;
+  min-height: 34px;
+  max-height: 96px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #f2ede2;
+  background: #1b1e28;
+  border: 1px solid rgba(212, 183, 90, 0.35);
+  border-radius: 4px;
+  outline: none;
+}
+.gal-inputbar textarea:focus { border-color: rgba(212, 183, 90, 0.7); }
+.gal-inputbar textarea:disabled { opacity: 0.55; }
+.gal-inputbar button {
+  flex: none;
+  padding: 0 20px;
+  font: inherit;
+  font-size: 13px;
+  color: #f5d879;
+  background: #2b2f3d;
+  border: 1px solid rgba(212, 183, 90, 0.5);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.gal-inputbar button:disabled { color: #5a564e; border-color: rgba(90, 86, 78, 0.5); cursor: default; }
+
+/* 文本框让位：底部堆叠的**实测总高** + 原本的 4vh 呼吸空间。
+   var 由 App 用 ResizeObserver 实时写入 —— 提示条出现/消失、
+   输入框换行长高，都能立刻反映出来，不再盖住「点击继续」和进度。 */
+.gal-app .gal-textbox { margin-bottom: calc(4vh + var(--gal-bottom-h, 0px)); }
+
+/* 提示条（发送失败 / 裸跑不可用等）。
+   ★ 为什么要有它：这些失败如果只是 console.warn，用户看到的就是「点了没反应」。
+   画面里说一句，比什么都强。 */
+.gal-notice {
+  /* 堆叠里的第一块：不再绝对定位，改在列内居中，
+     这样它永远在输入栏上方，不会去盖文本框。 */
+  align-self: center;
+  margin: 0 12px 8px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  max-width: 82%;
+  padding: 8px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #e8c98a;
+  background: rgba(24, 20, 14, 0.95);
+  border: 1px solid rgba(232, 168, 106, 0.55);
+  border-radius: 4px;
+}
+.gal-notice button {
+  flex: none;
+  padding: 2px 10px;
+  font: inherit;
+  color: #cfc9bc;
+  background: rgba(60, 54, 42, 0.9);
+  border: 1px solid rgba(139, 133, 120, 0.5);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+/* 小屏：楼层条窄一点，输入栏更紧凑。
+   文本框让位靠 --gal-bottom-h，这里不需要再覆盖高度。
+   ★ 窄屏的两个顶部标签（左侧「解析来源」、右侧「场景标签」）会与居中的
+   楼层条撞车 —— 尤其是出现「回到最新」按钮时楼层条变宽。
+   实测：480px 宽时两者横向重叠 40px。所以窄屏把两个标签一起下移一行。 */
+@media (max-width: 720px) {
+  .gal-floor-tag,
+  .gal-place { top: 46px; }
+}
+
+@media (max-width: 640px) {
+  .gal-floorbar { gap: 6px; padding: 4px 10px; font-size: 11px; }
+  .gal-inputbar { padding: 6px 8px; }
+}
+
 
 /* ══════════════════════════════════════════════════════════════
    伪全屏与撑高状态（S6）
