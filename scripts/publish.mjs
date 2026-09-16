@@ -37,6 +37,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadUrl } from './lib-delivery.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -113,7 +114,11 @@ check('minigal-界面-正式.json 存在', fs.existsSync(formalPath));
 let cdnUrl = null;
 if (fs.existsSync(formalPath)) {
   const formal = JSON.parse(fs.readFileSync(formalPath, 'utf8'));
-  cdnUrl = /\.load\('([^']+)'\)/.exec(formal.replaceString)?.[1] ?? null;
+  // 提取 load URL：实现见 lib-delivery.mjs（三个脚本共用一份）。
+  // 曾经的坑：写成 /\.load\('([^']+)'\)/ —— 要求 URL 后面紧跟 `)`，
+  // 给正则加了「加载失败提示」之后（load 变成带回调的形式）就匹配不到，
+  // 于是「检查显示 PASS、备注却是 (未解析到 URL)」——绿着但什么都没查到。
+  cdnUrl = loadUrl(formal.replaceString);
   const placeholder = typeof cdnUrl === 'string' && /REPLACE_ME/.test(cdnUrl);
   check('正式正则的 CDN 地址已填真实仓库', !placeholder, placeholder ? '⚠ 仍是 REPLACE_ME 占位符' : cdnUrl || '(未解析到 URL)');
 }
@@ -184,24 +189,28 @@ console.log('\n  git commit: ' + (commit.ok ? 'ok' : commit.out.split('\n')[0]))
 // 钉的是「刚刚那个包含产物的提交」，所以地址与产物永远自洽。
 // 代价：地址会变，需要更新酒馆里的正则（重导入 json，或直接改 URL 那一行）。
 // 开发迭代时请改用本机通道（minigal-界面-实时修改.json），它完全不经过 CDN。
-const sha = sh('git', ['rev-parse', 'HEAD']).out.trim();
-if (sha) {
+//
+// ★ 名字不能叫 sha —— 上面那个 sha 是**产物的 SHA-256**，两者含义不同。
+// 第一版我用了同一个名字，直接是语法错误（重复声明），而因为当时只跑了
+// --dry-run（走不到这一段），错误一直没暴露，直到正式发布才炸。
+const headSha = sh('git', ['rev-parse', 'HEAD']).out.trim();
+if (headSha) {
   const formalPath = path.join(ROOT, '导入到酒馆中', 'minigal-界面-正式.json');
   if (fs.existsSync(formalPath)) {
     const raw = fs.readFileSync(formalPath, 'utf8');
     // 只替换 @<版本标识> 这一段，其余（路径、域名、转义）原样保留
     const pinned = raw.replace(
       /(cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/@]+)@[^/]+(\/)/,
-      `$1@${sha}$2`,
+      `$1@${headSha}$2`,
     );
     if (pinned !== raw) {
       fs.writeFileSync(formalPath, pinned, 'utf8');
-      console.log(`  已把正式版地址钉到 @${sha.slice(0, 12)}…`);
+      console.log(`  已把正式版地址钉到 @${headSha.slice(0, 12)}…`);
       sh('git', ['add', formalPath]);
-      const pinCommit = sh('git', ['commit', '-m', `chore: 正式版 CDN 地址钉到 ${sha.slice(0, 12)}`]);
+      const pinCommit = sh('git', ['commit', '-m', `chore: 正式版 CDN 地址钉到 ${headSha.slice(0, 12)}`]);
       console.log('  git commit: ' + (pinCommit.ok ? 'ok (钉地址)' : pinCommit.out.split('\n')[0]));
     } else {
-      console.log(`  正式版地址已是 @${sha.slice(0, 12)}…（无需改动）`);
+      console.log(`  正式版地址已是 @${headSha.slice(0, 12)}…（无需改动）`);
     }
   }
 }

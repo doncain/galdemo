@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { loadUrl, isBranchRef } from './lib-delivery.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ARTIFACT = 'dist/yaoguai/minigal/index.html';
@@ -45,9 +46,9 @@ if (!existsSync(formalPath)) {
   process.exit(1);
 }
 const formal = JSON.parse(readFileSync(formalPath, 'utf8'));
-const url = /\.load\('([^']+)'\)/.exec(formal.replaceString)?.[1];
+const url = loadUrl(formal.replaceString);
 if (!url) {
-  console.error('没能从正式版 json 的 replaceString 里解析出 CDN 地址');
+  console.error('没能从正式版 json 的 replaceString 里解析出 CDN 地址（提取逻辑见 lib-delivery.mjs）');
   process.exit(1);
 }
 
@@ -64,13 +65,16 @@ if (/REPLACE_ME/.test(url)) {
   process.exit(1);
 }
 
-// 分支引用（@master / @main …）不可靠，必须警告。
+// 分支引用（@master / @main / @任意分支名）不可靠，必须警告。
 // 实测：jsDelivr 对分支的解析有缓存，purge 文件路径与 purge 分支都无效，
 // @master 会长期返回几轮之前的内容；而 @<commit-sha> 是内容寻址，立刻正确。
 // 危害在于「看起来一切正常」——CDN 返回 200、字节数稳定，只是内容是旧的，
 // 玩家看到的界面永远停在旧版，且清浏览器缓存也没用。
-const ref = /cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/@]+@([^/]+)\//.exec(url)?.[1] ?? '';
-if (/^(master|main|develop|dev|latest)$/i.test(ref)) {
+//
+// ★ 判定用 isBranchRef（凡不是提交号就算分支引用），而不是列举 master/main 之类：
+// 列举法的漏网之鱼是「分支不叫这几个名字」——那时检查会安静地放行。
+const ref = /@([^/]+)\//.exec(url)?.[1] ?? '';
+if (isBranchRef(url)) {
   console.log(`  ⚠ 地址用的是分支引用 @${ref} —— 这不可靠。`);
   console.log('    jsDelivr 对分支的解析会被缓存，实测会长期返回旧版本，');
   console.log('    而 purge（无论 purge 文件还是 purge 分支）都修不好它。');

@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { loadUrls } from './lib-delivery.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -97,7 +98,7 @@ function auditShape(name, raw) {
     // 早先写死了 `\.load\('([^']+)'\)`，一加回调就全部提取不到——
     // 表现为 7 条断言同时失败，看着像投递链路断了，其实只是提取正则太窄。
     check(`${name} · replaceString 用 $('body').load(...) 拉远程 HTML`, /\$\('body'\)\.load\('[^']+'/.test(rs));
-    const urls = [...rs.matchAll(/\.load\('([^']+)'/g)].map((m) => m[1]);
+    const urls = loadUrls(rs);
     check(`${name} · replaceString 恰有 1 个 load URL`, urls.length === 1, `实得 ${urls.length} 个`);
     // 加载失败必须有可见提示。否则「服务没起 / 地址写错 / 仓库私有」这类问题
     // 一律表现为楼层一片空白——用户看到「没有显示」，完全无从判断原因。
