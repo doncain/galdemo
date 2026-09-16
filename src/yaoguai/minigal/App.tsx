@@ -4,6 +4,8 @@ import { parseFloor } from './core/scriptParser';
 import { MOCK_FLOOR_STAGE, MOCK_FLOOR_WITH_CONTENT } from './core/fixtures';
 import { CHARACTERS, hasSprite } from './core/assets';
 import { resolveEmotion } from './core/scriptProtocol';
+import { runApiProbe, probeVerdict } from './core/apiProbe';
+import type { ProbeResult } from './core/apiProbe';
 
 // 降级夹具 = 把严格夹具的 <content> 标签摘掉，其余原样。
 // 这样「切换严格 / 降级」对比的是同一条故事，差异只来自协议边界。
@@ -42,6 +44,13 @@ export default function App() {
 
   const parsed = useMemo(() => parseFloor(floorText), [floorText]);
   const [index, setIndex] = useState(0);
+
+  // API 探针结果。null = 还没跑过（默认），所以默认 DOM 里不出现面板——
+  // 这很重要：验收脚本按 data-* 断言，默认态多出一堆文本会污染断言。
+  // ?probe=1 可自动跑一次（便于无头验证，也可存成书签）。
+  const [probe, setProbe] = useState<ProbeResult | null>(() =>
+    readSearch('probe') === '1' ? runApiProbe() : null,
+  );
 
   const hasContent = parsed.lines.length > 0;
   const strictMode = parsed.usedContentTag;
@@ -111,6 +120,69 @@ export default function App() {
         >
           切换严格 / 降级
         </button>
+
+        {/* API 探针（S2 交付物，应用内版）。
+            做成按钮而不是让人贴 DevTools：它天然跑在正确的 iframe 语境里，
+            不存在「选错上下文导致全红误报」的问题。 */}
+        <button
+          type="button"
+          className="gal-devbtn"
+          data-minigal="api-probe-btn"
+          onClick={() => setProbe(runApiProbe())}
+        >
+          探 API
+        </button>
+      </div>
+
+      {probe && <ApiProbePanel result={probe} onClose={() => setProbe(null)} />}
+    </div>
+  );
+}
+
+/**
+ * 探针结果面板。
+ * 只在点过按钮后渲染 —— 默认态不进入 DOM，避免干扰验收断言。
+ */
+function ApiProbePanel({ result, onClose }: { result: ProbeResult; onClose: () => void }) {
+  const verdict = probeVerdict(result);
+  const groups: Array<ProbeResult['rows'][number]['group']> = ['核心函数', '事件常量', 'MVU（可选）'];
+
+  return (
+    <div className="gal-probe" data-minigal="api-probe-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="gal-probe-head">
+        <strong>TavernHelper API 探针</strong>
+        <span data-minigal="api-probe-summary">
+          iframe={String(result.inIframe)} · {result.present}/{result.total} 存在
+        </span>
+        <button type="button" onClick={onClose}>
+          关闭
+        </button>
+      </div>
+
+      <div className={'gal-probe-verdict is-' + verdict.level} data-minigal="api-probe-verdict"
+        data-level={verdict.level}>
+        {verdict.text}
+      </div>
+
+      <div className="gal-probe-cols">
+        {groups.map((g) => (
+          <div key={g} className="gal-probe-col">
+            <div className="gal-probe-colhead">{g}</div>
+            {result.rows
+              .filter((r) => r.group === g)
+              .map((r) => (
+                <div key={r.label} className={'gal-probe-row' + (r.ok ? ' is-ok' : ' is-miss')}>
+                  <span className="gal-probe-mark">{r.ok ? '✓' : '✗'}</span>
+                  <span className="gal-probe-label">{r.label}</span>
+                  <span className="gal-probe-type">{r.type}</span>
+                </div>
+              ))}
+          </div>
+        ))}
+      </div>
+
+      <div className="gal-probe-foot">
+        只做存在性检查，未调用任何写函数。探针只证明「存在」，不证明「行为正确」。
       </div>
     </div>
   );
