@@ -92,9 +92,21 @@ function auditShape(name, raw) {
     const FENCE = '`'.repeat(3);
     check(`${name} · replaceString 带 ${FENCE} 围栏（酒馆助手据此提升为 iframe）`, rs.includes(FENCE));
     check(`${name} · replaceString 含 <body>`, /<body>/.test(rs));
-    check(`${name} · replaceString 用 $('body').load(...) 拉远程 HTML`, /\$\('body'\)\.load\('[^']+'\)/.test(rs));
-    const urls = [...rs.matchAll(/\.load\('([^']+)'\)/g)].map((m) => m[1]);
+    // URL 的取法：**不能要求 `')` 紧跟 URL**。load 可以带回调
+    // （我们用它做「加载失败时的可见提示」），那样 URL 后面跟的是 `', function`。
+    // 早先写死了 `\.load\('([^']+)'\)`，一加回调就全部提取不到——
+    // 表现为 7 条断言同时失败，看着像投递链路断了，其实只是提取正则太窄。
+    check(`${name} · replaceString 用 $('body').load(...) 拉远程 HTML`, /\$\('body'\)\.load\('[^']+'/.test(rs));
+    const urls = [...rs.matchAll(/\.load\('([^']+)'/g)].map((m) => m[1]);
     check(`${name} · replaceString 恰有 1 个 load URL`, urls.length === 1, `实得 ${urls.length} 个`);
+    // 加载失败必须有可见提示。否则「服务没起 / 地址写错 / 仓库私有」这类问题
+    // 一律表现为楼层一片空白——用户看到「没有显示」，完全无从判断原因。
+    const hasErrorBranch = /status\s*===\s*'error'/.test(rs);
+    check(
+      `${name} · load 带失败回调（失败时给可见提示，不静默空白）`,
+      hasErrorBranch,
+      hasErrorBranch ? '' : '缺少失败分支——加载失败会静默变成空白',
+    );
     return { json, url: urls[0] };
   }
   return { json, url: null };

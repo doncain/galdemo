@@ -3,7 +3,7 @@
   "id": "b2e1d4c3-8c75-4f29-8d6b-3e4f7a9b01c2",
   "scriptName": "minigal-界面",
   "findRegex": "/[\\s\\S]*/s",
-  "replaceString": "```\n<body>\n<script>\n$('body').load('http://localhost:5173/dist/yaoguai/minigal/index.html')\n</script>\n</body>\n```",
+  "replaceString": "```\n<body>\n<script>\n$('body').load('http://localhost:5173/dist/yaoguai/minigal/index.html', function (res, status) {\n  if (status === 'error') {\n    $('body').html(\n      '<div style=\"padding:22px 26px;font-family:system-ui,sans-serif;line-height:1.8;color:#e8c98a;background:#191b21;border-left:4px solid #e8a86a;border-radius:4px\">' +\n      '<div style=\"font-size:15px;font-weight:600;margin-bottom:8px\">' +\n      'minigal 界面加载失败</div>' +\n      '<div style=\"font-size:12px;color:#9a948a;margin-bottom:10px\">' +\n      '请求地址：http://localhost:5173/dist/yaoguai/minigal/index.html</div>' +\n      '<div style=\"font-size:12px;color:#cfc9bc\">' +\n      '排查：① 在项目根目录跑 <b>npm run serve</b>，确认它打印的地址与上面一致；② 确认这个正则已启用、且「正式版」那条已禁用；③ 换端口的话要同步改这里的 URL。</div>' +\n      '</div>'\n    );\n  }\n});\n</script>\n</body>\n```",
   "placement": [
     2
   ],
