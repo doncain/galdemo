@@ -351,11 +351,29 @@
   ① npm run build                       构建
   ② node scripts/publish.mjs --dry-run  只检查，不提交（推荐）
   ③ node scripts/publish.mjs            检查 + 提交 + 推送
-  ④ 按脚本打印的提示核对 CDN 字节数
+  ④ node scripts/verify-cdn.mjs         核对 CDN 拿到的是不是同一份
   ⑤ 需要立刻生效时，打开脚本给出的 purge 链接刷缓存
      （不刷则玩家最多 12 小时内自动拿到新版）
 
-它会替你挡住两个常见事故：
+★ 第 ④ 步以前要手工做（publish.mjs 只打印命令），现在有脚本了。
+  它从「正式版 json」里读 CDN 地址，所以地址一改它自动跟着改，
+  不会出现「脚本查的地址与交付件不一致」的假通过。
+
+  它会自己重试，因为**jsDelivr 对新推送的提交需要时间回源**——
+  推完立刻查，多半还是旧版，你会以为发布失败。
+
+  ★ 实测经验：purge 接口返回 `"status":"finished"` 之后，
+    **边缘缓存还要几分钟才真正生效**。有一次 10 次重试（约 3 分钟）
+    仍然拿到旧版，到第 4~5 分钟才更新。所以核对失败先别改代码，
+    等一会儿重跑：
+
+      node scripts/verify-cdn.mjs
+
+    想只查一次（CI 或快速确认）：
+
+      node scripts/verify-cdn.mjs --once
+
+  它会替你挡住两个常见事故：
 
   · 产物比源码旧（改了代码没重新构建）→ 拒绝发布
   · CDN 地址还是 REPLACE_ME → 拒绝发布
