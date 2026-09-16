@@ -5,10 +5,15 @@
   "description": "minigal - galgame 楼层剧本前端（S2 交付层）",
   "scripts": {
     "build": "webpack --mode production && node scripts/inline.mjs",
+    "watch": "node scripts/watch.mjs",
     "test": "tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\"",
     "typecheck": "tsc --noEmit",
     "verify:delivery": "node scripts/verify-delivery.mjs",
+    "verify:cdn": "node scripts/verify-cdn.mjs",
+    "verify:guard": "node scripts/verify-iframe-guard.mjs",
+    "verify:probe": "node scripts/verify-api-probe.mjs",
     "serve": "node scripts/serve.mjs",
+    "preview": "node scripts/preview-floor.mjs",
     "publish:check": "node scripts/publish.mjs --dry-run",
     "publish": "node scripts/publish.mjs"
   },

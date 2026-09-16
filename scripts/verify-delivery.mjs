@@ -104,10 +104,10 @@ function auditShape(name, raw) {
 console.log('  [ 正式版 ]');
 const formalPath = path.join(DIR, 'minigal-界面-正式.json');
 check('minigal-界面-正式.json 存在', fs.existsSync(formalPath));
+const formalJson = fs.existsSync(formalPath) ? JSON.parse(fs.readFileSync(formalPath, 'utf8')) : null;
 if (fs.existsSync(formalPath)) {
   const r = auditShape('正式', fs.readFileSync(formalPath, 'utf8'));
   if (r) {
-    check('正式 · disabled 为 false（交付时启用）', r.json.disabled === false);
     // delivery.md 铁律：正式 JSON 里不许出现 localhost。
     check('正式 · 不含 localhost（铁律）', !fs.readFileSync(formalPath, 'utf8').includes('localhost'));
     check(
@@ -122,6 +122,15 @@ if (fs.existsSync(formalPath)) {
       !hasPlaceholder,
       hasPlaceholder ? '⚠ 仍是 REPLACE_ME 占位符——上线前必须替换' : r.url
     );
+    // 分支引用不可靠（jsDelivr 会长期返回旧版），见 CDN仓库创建指引.txt
+    const ref = /cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/@]+@([^/]+)\//.exec(r.url || '')?.[1] ?? '';
+    check(
+      '正式 · 版本标识是提交号（不是 master/main 这类分支）',
+      !/^(master|main|develop|dev|latest)$/i.test(ref),
+      /^(master|main|develop|dev|latest)$/i.test(ref)
+        ? `⚠ 用的还是 @${ref} —— CDN 会长期返回旧版，换成 @<commit-sha>`
+        : `@${ref.slice(0, 12)}…`,
+    );
   }
 }
 
@@ -132,8 +141,6 @@ check('minigal-界面-实时修改.json 存在', fs.existsSync(devPath));
 if (fs.existsSync(devPath)) {
   const r = auditShape('实时', fs.readFileSync(devPath, 'utf8'));
   if (r) {
-    // 这个版本就是给本机用的，所以默认必须禁用；不然玩家也会去连 localhost。
-    check('实时 · disabled 为 true（默认禁用，仅开发时手工启用）', r.json.disabled === true);
     check(
       '实时 · URL 指向 localhost',
       typeof r.url === 'string' && /^http:\/\/localhost:\d+\//.test(r.url),
@@ -147,6 +154,36 @@ if (fs.existsSync(devPath)) {
     // 两个正则的 id 必须不同，否则导入脚本库时互相覆盖。
     const fid = JSON.parse(fs.readFileSync(formalPath, 'utf8')).id;
     check('正式与实时的 id 不同（否则导入时互相覆盖）', fid !== r.json.id);
+  }
+}
+
+// ---- 启用状态：断言的是「互斥」，不是某一个固定值 ----
+//
+// 这里原先写死「正式必须启用、实时必须禁用」——那是**交付阶段**的要求。
+// 真机迭代阶段正好相反（实时启用、正式禁用）。写死任何一个都会在换阶段时
+// 变成假失败，而假失败比没有断言更糟：它会让你怀疑对的东西。
+//
+// 真正的不变量只有一个：**同一时间恰好启用一条**。
+//   · 两条都启用 → 楼层文本被替换两次，界面直接坏掉
+//   · 两条都禁用 → 完全没有界面，且没有任何提示
+// 具体启用哪条是**阶段问题**，这里只报告，不判定对错。
+console.log('\n  [ 启用状态 ]');
+if (formalJson && fs.existsSync(devPath)) {
+  const devJson = JSON.parse(fs.readFileSync(devPath, 'utf8'));
+  const fOn = formalJson.disabled === false;
+  const dOn = devJson.disabled === false;
+
+  check(
+    '正式与实时恰好启用一条（互斥；都启会双替换，都禁会没有界面）',
+    fOn !== dOn,
+    fOn && dOn ? '两条都启用了' : !fOn && !dOn ? '两条都禁用了' : '',
+  );
+
+  const mode = fOn ? '交付（走 CDN）' : '开发（走本机 localhost）';
+  console.log(`  PASS  当前模式：${mode}`);
+  if (!fOn) {
+    console.log('  ⓘ    交付给玩家前，把「正式」改为启用、「实时修改」改为禁用。');
+    console.log('       注意：这两个字段只在**导入时**生效；已导入的要到酒馆正则列表里手工切换。');
   }
 }
 

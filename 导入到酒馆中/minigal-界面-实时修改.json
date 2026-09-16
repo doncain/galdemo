@@ -1,5 +1,5 @@
 {
-  "_说明": "minigal 界面正则（实时修改版）——结构和正式版完全一样，只把 URL 换成本机服务、并默认禁用。开发时启用它、禁用正式版；交付给玩家前必须确认它是 disabled。",
+  "_说明": "minigal 界面正则（实时修改版）——结构和正式版完全一样，只把 URL 换成本机服务。★ 当前阶段（真机迭代）默认启用这一条、禁用正式版。用它的前提是本机在跑 node scripts/serve.mjs（默认 5173 端口）。改代码时开 npm run watch 自动重建，然后在酒馆里切一下楼层再切回来即可看到新效果。它完全不经过 CDN，也不受任何缓存影响。交付给玩家前必须确认这条是 disabled。",
   "id": "b2e1d4c3-8c75-4f29-8d6b-3e4f7a9b01c2",
   "scriptName": "minigal-界面",
   "findRegex": "/[\\s\\S]*/s",
@@ -7,7 +7,7 @@
   "placement": [
     2
   ],
-  "disabled": true,
+  "disabled": false,
   "markdownOnly": true,
   "promptOnly": false,
   "runOnEdit": false,
