@@ -32,6 +32,7 @@ const STEPS = [
   { name: 'S4 模拟酒馆', args: ['scripts/verify-s4-ui.mjs'], extract: (o) => (o.match(/汇总：([\d/]+) 通过/) || [])[1] },
   { name: 'S5 模拟酒馆', args: ['scripts/verify-s5-ui.mjs'], extract: (o) => (o.match(/汇总：([\d/]+) 通过/) || [])[1] },
   { name: '布局几何', args: ['scripts/verify-layout.mjs'], extract: (o) => (o.match(/汇总：([\d/]+) 通过/) || [])[1] },
+  { name: '锁定前端', args: ['scripts/verify-lock.mjs'], extract: (o) => (o.match(/汇总：([\d/]+) 通过/) || [])[1] },
   { name: '探针自检', args: ['scripts/verify-api-probe.mjs'], extract: (o) => (o.match(/(\d+)\/(\d+) 通过/) || [])[0] },
   { name: '撑高集成', args: ['scripts/verify-iframe-guard.mjs'], extract: (o) => (o.match(/(\d+)\/(\d+) 通过/) || [])[0] },
   { name: '交付自检', args: ['scripts/verify-delivery.mjs'], extract: (o) => (o.match(/结果: (PASS \d+ \/ FAIL \d+)/) || [])[1] },
@@ -62,7 +63,7 @@ console.log(`\n════ ${rows.length - failed.length}/${rows.length} 套通
 if (failed.length) {
   console.log('  失败：' + failed.map((r) => r.name).join('、'));
 }
-console.log('  ⚠ 本地全绿 ≠ 真机通过。S4/S5 各有一道真机门：');
-console.log('    导入到酒馆中/S4真机验证清单.txt、导入到酒馆中/S5真机验证清单.txt\n');
+console.log('  ⚠ 本地全绿 ≠ 真机通过。S4/S5/S6 各有一道真机门：');
+console.log('    导入到酒馆中/S4真机验证清单.txt、S5真机验证清单.txt、S6真机验证清单.txt\n');
 
 process.exit(failed.length ? 1 : 0);

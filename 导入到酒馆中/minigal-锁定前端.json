@@ -1,0 +1,17 @@
+{
+  "_说明": "minigal 锁定前端 —— 独立酒馆助手脚本（脚本类，不是正则）。全屏某楼层时自动隐藏其它楼层，并保护该楼 iframe 不被酒馆销毁。导入方式是「导入脚本库」，与界面正则不同。地址锁定到具体提交号：jsDelivr 对分支的解析缓存极不可靠，详见 CDN仓库创建指引.txt。开发迭代想走本机通道时，改法见 导入说明.txt —— 本文件刻意不写本机地址：交付件里出现本机地址一律当事故处理，不靠「这句只是说明」自证清白。",
+  "id": "c3f2e5d4-9d86-4a3b-9e7c-4f5a8b0c2d31",
+  "name": "minigal-锁定前端",
+  "enabled": true,
+  "type": "script",
+  "content": "import 'https://cdn.jsdelivr.net/gh/doncain/galdemo@31cb1e06e51171d2b70f085e3756633d2d8407c0/dist/minigal-lock/index.js';",
+  "info": "全屏某楼层时自动隐藏其它楼层，并保护该楼 iframe 不被销毁（minigal 配套的独立脚本，可选）",
+  "button": {
+    "buttons": []
+  },
+  "data": {},
+  "export_with": {
+    "data": true,
+    "button": true
+  }
+}

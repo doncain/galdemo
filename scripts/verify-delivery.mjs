@@ -234,5 +234,63 @@ if (fs.existsSync(distPath)) {
 }
 
 
+// ---- 锁定前端脚本（独立交付件）----
+// 它是**脚本类**交付件，不是正则；导入方式不同、CDN 路径不同、构建也不同，
+// 所以单独一段检查。漏检的后果是「界面更新了，但锁定功能还是旧的」——
+// 只有一半功能生效，而且没人会想到是发布漏了一个产物。
+console.log('\n  [ 锁定前端脚本 ]');
+const lockBundle = path.join(ROOT, 'dist', 'minigal-lock', 'index.js');
+check('dist/minigal-lock/index.js 存在', fs.existsSync(lockBundle));
+if (fs.existsSync(lockBundle)) {
+  const lockSrc = fs.readFileSync(lockBundle, 'utf8');
+  const lockSize = Buffer.byteLength(lockSrc, 'utf8');
+  check('锁定脚本产物非空', lockSize > 1000, `${lockSize}B`);
+  // ★ 证明它不是空壳：产物里必须真的带着三样标志串。
+  //   只断言「文件存在」的话，一个构建配置写错导致的空 bundle 也能通过。
+  check('产物含隐藏样式 id（不是空壳）', lockSrc.includes('minigal-lock-floor-style'));
+  check('产物含保护脚本 id（不是空壳）', lockSrc.includes('minigal-lock-protect-script'));
+  check('产物含原型还原入口（否则卸载后酒馆再也删不掉东西）', lockSrc.includes('__minigalLockCleanup'));
+  check('锁定脚本不含本机地址', !lockSrc.includes('localhost'));
+}
+
+const lockJsonPath = path.join(DIR, 'minigal-锁定前端.json');
+check('minigal-锁定前端.json 存在', fs.existsSync(lockJsonPath));
+if (fs.existsSync(lockJsonPath)) {
+  const rawJson = fs.readFileSync(lockJsonPath, 'utf8');
+  let j = null;
+  try {
+    j = JSON.parse(rawJson);
+    check('锁定脚本 JSON 可解析', true);
+  } catch (e) {
+    check('锁定脚本 JSON 可解析', false, e.message);
+  }
+  if (j) {
+    check('type 为 script（脚本类，不是正则）', j.type === 'script', String(j.type));
+    check('enabled 为 true', j.enabled === true, String(j.enabled));
+    check('name 与界面正则不同（导入时不会互相覆盖）', j.name !== 'minigal-界面', String(j.name));
+    // 铁律：交付件里不许出现本机地址
+    check('锁定脚本 JSON 不含本机地址（铁律）', !rawJson.includes('localhost'));
+    const m = /cdn\.jsdelivr\.net\/gh\/([^/]+)\/([^/@]+)@([^/]+)\//.exec(String(j.content));
+    check('content 走 jsDelivr CDN', !!m, m ? m[0] : String(j.content).slice(0, 60));
+    check('content 已填真实仓库（无占位符）', !/REPLACE_ME/.test(rawJson));
+    check('content 指向锁定脚本产物', String(j.content).includes('dist/minigal-lock/index.js'));
+    // 地址钉提交号（不是 @master）—— 同界面正则的理由，见 CDN仓库创建指引
+    if (m) check('地址钉到提交号（非 @master 之类）', /^[0-9a-f]{7,40}$/i.test(m[3]), `@${m[3]}`);
+    // id 必须与界面正则不同，否则脚本库里会互相覆盖
+    const idSet = new Set();
+    for (const f of ['minigal-界面-正式.json', 'minigal-界面-实时修改.json']) {
+      const p = path.join(DIR, f);
+      if (!fs.existsSync(p)) continue;
+      try {
+        const other = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (other.id) idSet.add(String(other.id));
+      } catch {
+        /* 上面已单独检查过那两个文件 */
+      }
+    }
+    check('id 与界面正则的 id 都不同（否则导入时互相覆盖）', !idSet.has(String(j.id)), String(j.id));
+  }
+}
+
 console.log('\n=== 结果: PASS ' + pass + ' / FAIL ' + fail + ' ===\n');
 process.exit(fail > 0 ? 1 : 0);

@@ -83,26 +83,48 @@ const html = fs.readFileSync(artifactPath, 'utf8');
 const size = Buffer.byteLength(html, 'utf8');
 const sha = crypto.createHash('sha256').update(html, 'utf8').digest('hex');
 
-// 铁律 1 的机器化：产物必须比所有源码新。产物比源码旧 ⇒ 你改了代码没重新构建，
+// 铁律 1 的机器化：产物必须比**它自己的**源码新。产物比源码旧 ⇒ 你改了代码没重新构建，
 // 即将把一个旧版本发布上线（CDN 上一版之后就没变过，你会以为发布失败）。
-const srcFiles = [];
-const collect = (dir) => {
-  if (!fs.existsSync(dir)) return;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === 'node_modules') continue;
-    const fp = path.join(dir, e.name);
-    if (e.isDirectory()) collect(fp);
-    else if (/\.(tsx?|css|html)$/.test(e.name)) srcFiles.push(fp);
-  }
-};
-collect(path.join(ROOT, 'src'));
-const artifactMtime = fs.statSync(artifactPath).mtimeMs;
-const newestSrc = srcFiles.reduce((a, f) => (fs.statSync(f).mtimeMs > a.mtimeMs ? { mtimeMs: fs.statSync(f).mtimeMs, f } : a), { mtimeMs: 0, f: '(none)' });
-check(
-  '产物比所有源码新（否则你发的是旧版）',
-  artifactMtime >= newestSrc.mtimeMs,
-  artifactMtime >= newestSrc.mtimeMs ? '' : `最新源码 ${path.relative(ROOT, newestSrc.f)} 比产物新——先跑 npm run build`
-);
+//
+// ★ 每份产物配一个源码目录，不能统一拿整个 src/ 去比：
+//   本项目有两个独立构建（前端单文件 + 锁定前端脚本）。若统一比，
+//   改锁定脚本会把**前端产物**判成过期、发布被拒 —— 而真正该重建的只有那一个。
+//   误报的代价是让人开始怀疑这套检查本身，最后把它关掉，那才是最坏的结果。
+const FRESH = [
+  { label: '前端产物', artifact: artifactPath, src: 'src/yaoguai' },
+  { label: '锁定前端脚本', artifact: path.join(ROOT, 'dist/minigal-lock/index.js'), src: 'src/lock' },
+];
+
+for (const t of FRESH) {
+  const exists = fs.existsSync(t.artifact);
+  check(`${t.label}存在`, exists, path.relative(ROOT, t.artifact).replace(/\\/g, '/'));
+  if (!exists) continue;
+
+  const files = [];
+  const collect = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules') continue;
+      const fp = path.join(dir, e.name);
+      if (e.isDirectory()) collect(fp);
+      else if (/\.(tsx?|css|html)$/.test(e.name) && !/\.test\.ts$/.test(e.name)) files.push(fp);
+    }
+  };
+  collect(path.join(ROOT, t.src));
+
+  const mtime = fs.statSync(t.artifact).mtimeMs;
+  const newest = files.reduce(
+    (a, f) => (fs.statSync(f).mtimeMs > a.mtimeMs ? { mtimeMs: fs.statSync(f).mtimeMs, f } : a),
+    { mtimeMs: 0, f: '(none)' },
+  );
+  check(
+    `${t.label}比它的源码新（否则你发的是旧版）`,
+    mtime >= newest.mtimeMs,
+    mtime >= newest.mtimeMs
+      ? ''
+      : `最新源码 ${path.relative(ROOT, newest.f)} 比产物新——先跑 npm run build`,
+  );
+}
 
 check('产物含内联 <script>', /<script>/.test(html));
 check('正式产物不含 localhost', !html.includes('localhost'));
@@ -166,7 +188,7 @@ if (DRY) {
 
 // ── 4. 提交并推送 ────────────────────────────────────────────────
 // 只提交产物与交付件，不 add -A：避免把 node_modules、本地截图、临时脚本一起推上去。
-const addTargets = [ARTIFACT, '导入到酒馆中'];
+const addTargets = [ARTIFACT, 'dist/minigal-lock', '导入到酒馆中'];
 for (const t of addTargets) {
   const r = sh('git', ['add', t]);
   if (!r.ok) console.log(`  git add ${t} 失败: ${r.out}`);
@@ -195,23 +217,41 @@ console.log('\n  git commit: ' + (commit.ok ? 'ok' : commit.out.split('\n')[0]))
 // --dry-run（走不到这一段），错误一直没暴露，直到正式发布才炸。
 const headSha = sh('git', ['rev-parse', 'HEAD']).out.trim();
 if (headSha) {
-  const formalPath = path.join(ROOT, '导入到酒馆中', 'minigal-界面-正式.json');
-  if (fs.existsSync(formalPath)) {
-    const raw = fs.readFileSync(formalPath, 'utf8');
-    // 只替换 @<版本标识> 这一段，其余（路径、域名、转义）原样保留
-    const pinned = raw.replace(
-      /(cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/@]+)@[^/]+(\/)/,
-      `$1@${headSha}$2`,
-    );
-    if (pinned !== raw) {
-      fs.writeFileSync(formalPath, pinned, 'utf8');
-      console.log(`  已把正式版地址钉到 @${headSha.slice(0, 12)}…`);
-      sh('git', ['add', formalPath]);
-      const pinCommit = sh('git', ['commit', '-m', `chore: 正式版 CDN 地址钉到 ${headSha.slice(0, 12)}`]);
-      console.log('  git commit: ' + (pinCommit.ok ? 'ok (钉地址)' : pinCommit.out.split('\n')[0]));
-    } else {
-      console.log(`  正式版地址已是 @${headSha.slice(0, 12)}…（无需改动）`);
+  // ★ 两份交付 JSON 都要钉：界面正则 + 锁定前端脚本。
+  //   漏掉任何一份，那份就会在 CDN 上卡在旧版本，且症状是「只有一半功能更新了」——
+  //   极难联想到这里。所以写成一张表，加新交付件时只加一行。
+  //   为什么按「整份文件的文本」替换而不是按字段：
+  //   两者字段名不同（replaceString vs content），且都要保留原有转义，
+  //   只动 @<版本标识> 这一段最安全。
+  const PIN_JSONS = [
+    { file: 'minigal-界面-正式.json', label: '界面正则' },
+    { file: 'minigal-锁定前端.json', label: '锁定前端脚本' },
+  ];
+  const pinRe = /(cdn\.jsdelivr\.net\/gh\/[^/]+\/[^/@]+)@[^/]+(\/)/;
+  const pinnedFiles = [];
+
+  for (const t of PIN_JSONS) {
+    const p = path.join(ROOT, '导入到酒馆中', t.file);
+    if (!fs.existsSync(p)) continue;
+    const raw = fs.readFileSync(p, 'utf8');
+    if (!pinRe.test(raw)) {
+      console.log(`  ${t.label}：文件里没有 jsDelivr 地址，跳过`);
+      continue;
     }
+    const pinned = raw.replace(pinRe, `$1@${headSha}$2`);
+    if (pinned !== raw) {
+      fs.writeFileSync(p, pinned, 'utf8');
+      console.log(`  已把${t.label}的地址钉到 @${headSha.slice(0, 12)}…`);
+      pinnedFiles.push(p);
+    } else {
+      console.log(`  ${t.label}地址已是 @${headSha.slice(0, 12)}…（无需改动）`);
+    }
+  }
+
+  if (pinnedFiles.length) {
+    for (const p of pinnedFiles) sh('git', ['add', p]);
+    const pinCommit = sh('git', ['commit', '-m', `chore: 交付件 CDN 地址钉到 ${headSha.slice(0, 12)}`]);
+    console.log('  git commit: ' + (pinCommit.ok ? 'ok (钉地址)' : pinCommit.out.split('\n')[0]));
   }
 }
 

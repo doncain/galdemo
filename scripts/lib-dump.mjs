@@ -29,7 +29,29 @@ export const CHROME = CHROME_CANDIDATES.find((p) => existsSync(p)) ?? CHROME_CAN
 const USER_DATA_DIR = 'C:/Users/24015/AppData/Local/Temp/minigal-chrome';
 
 /**
- * 产物是否比源码新。
+ * 需要保持新鲜的产物清单。
+ *
+ * ★ 为什么必须是「每份产物配一个源码目录」，而不是「所有产物 vs 整个 src/」：
+ * 本项目有两个独立构建（前端单文件 + 锁定前端脚本）。
+ * 若统一拿整个 src/ 去比，改锁定脚本会让**前端产物**被判定为过期 ——
+ * 于是所有验收脚本一起拒绝运行，而真正该重建的只有那一个。
+ * 这类误报会让人开始怀疑这套检查本身，最后把它关掉，那才是最坏的结果。
+ */
+const FRESH_TARGETS = {
+  app: {
+    label: '前端产物',
+    artifact: 'dist/yaoguai/minigal/index.html',
+    src: 'src/yaoguai',
+  },
+  lock: {
+    label: '锁定前端脚本',
+    artifact: 'dist/minigal-lock/index.js',
+    src: 'src/lock',
+  },
+};
+
+/**
+ * 产物是否比它自己的源码新。
  *
  * ── 为什么值得做成自动检查 ────────────────────────────────────
  * 「改了源码忘了重新构建」有两种表现，都不好认：
@@ -37,13 +59,17 @@ const USER_DATA_DIR = 'C:/Users/24015/AppData/Local/Temp/minigal-chrome';
  *   · 更坏的一种：断言**全绿**，因为它验的是旧产物，而旧产物本来是对的
  * 一轮里我犯过两次。每次都要花几分钟才反应过来。
  *
- * 而它完全可以自动发现：产物的 mtime 必须 >= src/ 下所有源码的 mtime。
+ * 而它完全可以自动发现：产物的 mtime 必须 >= 对应源码目录下所有源码的 mtime。
  * 排除 *.test.ts —— 测试改动不影响产物，把它算进来会频繁误报。
  */
-export function artifactStaleness(root) {
-  const artifact = resolve(root, 'dist/yaoguai/minigal/index.html');
-  if (!existsSync(artifact)) return { ok: false, reason: 'missing', newer: [] };
+export function artifactStaleness(root, which = 'app') {
+  const t = FRESH_TARGETS[which];
+  if (!t) return { ok: false, reason: 'bad-target', newer: [] };
+
+  const artifact = resolve(root, t.artifact);
+  if (!existsSync(artifact)) return { ok: false, reason: 'missing', newer: [], label: t.label };
   const artifactMs = statSync(artifact).mtimeMs;
+
   const newer = [];
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -54,20 +80,22 @@ export function artifactStaleness(root) {
       }
     }
   };
-  const src = resolve(root, 'src');
+  const src = resolve(root, t.src);
   if (existsSync(src)) walk(src);
-  return { ok: newer.length === 0, reason: newer.length ? 'stale' : '', newer };
+
+  return { ok: newer.length === 0, reason: newer.length ? 'stale' : '', newer, label: t.label };
 }
 
 /** 不新鲜就直接退出，并说清「哪个文件比产物新」。 */
-export function assertArtifactFresh(root) {
-  const r = artifactStaleness(root);
+export function assertArtifactFresh(root, which = 'app') {
+  const r = artifactStaleness(root, which);
+  if (r.reason === 'bad-target') return;
   if (r.reason === 'missing') {
-    console.error('\n✗ 缺少产物。先跑：npm run build\n');
+    console.error(`\n✗ 缺少${r.label ?? '产物'}。先跑：npm run build\n`);
     process.exit(1);
   }
   if (!r.ok) {
-    console.error('\n✗ 产物比源码旧 —— 你现在验的是旧产物，结论不可信。');
+    console.error(`\n✗ ${r.label}比它的源码旧 —— 你现在验的是旧产物，结论不可信。`);
     console.error('  比产物新的源码：');
     r.newer.slice(0, 8).forEach((f) => console.error('    ' + relative(root, f).replace(/\\/g, '/')));
     if (r.newer.length > 8) console.error(`    … 另有 ${r.newer.length - 8} 个`);

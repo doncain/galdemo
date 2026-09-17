@@ -183,6 +183,66 @@ function closestMes(p$: any) {
   return iframe ? p$(iframe).closest('.mes') : p$('#chat .mes').last();
 }
 
+/**
+ * 与「锁定前端」脚本的通报契约。改名要两边一起改。
+ */
+export const FULLSCREEN_EVENT = 'minigal:fullscreen';
+export const FS_FLAG = '__minigalFullscreen';
+export const FS_FLOOR_FLAG = '__minigalFullscreenFloor';
+
+/** 自己所在的楼层号（父页 .mes[mesid]）。拿不到返回 null。 */
+export function selfFloorId(): number | null {
+  const iframe = getSelfIframe();
+  if (!iframe) return null;
+  try {
+    const raw = iframe.closest('.mes')?.getAttribute('mesid');
+    if (raw == null) return null;
+    const n = parseInt(raw, 10);
+    return Number.isNaN(n) ? null : n;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把「我正在全屏 / 我刚退出」通报给父页。
+ *
+ * ── 为什么必须有这一步 ────────────────────────────────────────
+ * 独立部署的「锁定前端」脚本默认只监听父页的 `fullscreenchange`。
+ * 但原生全屏**经常被浏览器策略拒绝** —— 那时 `fullscreenchange` 永远不会触发，
+ * 锁定脚本也就一次都不会生效：玩家明明在全屏，别的楼层却照旧被删掉，
+ * 而且毫无提示。这是「伪全屏兜底」的必然代价 —— 兜底路径没有原生事件。
+ *
+ * 所以主动通报，三条通道一起走，任何一条通就够：
+ *   ① 父页 window 上的标志位（脚本**后**加载时靠它补锁）
+ *   ② 父页 document 上的自定义事件（脚本**已**加载时靠它实时响应）
+ *   ③ 原生 fullscreenchange（原生全屏成功时浏览器自己会派发，不用我们管）
+ *
+ * 全部 try/catch：跨域或拿不到父页时静默放弃 —— 通报失败绝不能连累全屏本身。
+ */
+function announceFullscreen(on: boolean, floorId: number | null): void {
+  const pw = window.parent as any;
+  try {
+    if (pw && pw !== window) {
+      pw[FS_FLAG] = on;
+      // ★ 楼层号也要带上：只给一个布尔标志位的话，脚本后加载时
+      //   根本不知道「该锁哪一楼」，只能去猜（比如取最后一楼）—— 猜错就锁错人。
+      pw[FS_FLOOR_FLAG] = on ? floorId : null;
+    }
+  } catch {
+    /* 跨域 */
+  }
+  try {
+    const pd = getParentDocument();
+    if (pd) {
+      const Ctor = pw?.CustomEvent ?? CustomEvent;
+      pd.dispatchEvent(new Ctor(FULLSCREEN_EVENT, { detail: { on, floorId: on ? floorId : null } }));
+    }
+  } catch {
+    /* noop */
+  }
+}
+
 /* ── 进入伪全屏：CSS 藏楼 + .mes 顶满视口 + 原生全屏尽力而为 ── */
 export async function enterFullscreen(): Promise<boolean> {
   const iframe = getSelfIframe();
@@ -223,6 +283,9 @@ export async function enterFullscreen(): Promise<boolean> {
     setIframeSize(iframe, '100%', '100%');
 
     (window as any).__minigalFullscreen = true;
+    // 通报给父页，让独立部署的「锁定前端」脚本能锁住这一楼
+    // （原生全屏被拒时没有 fullscreenchange，只能靠这条）
+    announceFullscreen(true, selfFloorId());
 
     // 原生全屏尽力而为：被浏览器策略拒绝也无妨，
     // 上面的 CSS 已经把画面铺满了（这是「伪全屏」兜底的价值）。
@@ -260,6 +323,11 @@ export async function exitFullscreen(restoreSize?: () => void): Promise<void> {
     }
     pd?.getElementById(STYLE_ID)?.remove();
     (window as any).__minigalFullscreen = false;
+    // 通报退出，让「锁定前端」解锁。
+    // ★ 这一步放在 catch 之内是刻意的：即使上面的清理出错，也要尽量通报 ——
+    //   否则锁定脚本会一直以为你还在全屏，把其余楼层永久藏住，
+    //   而玩家看到的是「酒馆突然只剩一层楼了」。
+    announceFullscreen(false, null);
     // 退出后要重撑一次：全屏期间守卫是跳过的，
     // 复位后 iframe 可能停在错误尺寸（需要连补几次修竞态）。
     restoreSize?.();
