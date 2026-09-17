@@ -4,7 +4,7 @@
   "name": "minigal-锁定前端",
   "enabled": true,
   "type": "script",
-  "content": "import 'https://cdn.jsdelivr.net/gh/doncain/galdemo@31cb1e06e51171d2b70f085e3756633d2d8407c0/dist/minigal-lock/index.js';",
+  "content": "import 'https://cdn.jsdelivr.net/gh/doncain/galdemo@eed9973c3929b0c5b343d46e0d14a7fd99fad5cc/dist/minigal-lock/index.js';",
   "info": "全屏某楼层时自动隐藏其它楼层，并保护该楼 iframe 不被销毁（minigal 配套的独立脚本，可选）",
   "button": {
     "buttons": []
